@@ -19,12 +19,11 @@ def install_fonts():
             if f.lower().endswith((".ttf", ".otf")):
                 shutil.copy(os.path.join(src, f), dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
-        # Sprawdźmy co widzi system
         res = subprocess.run(["fc-list", ":family"], capture_output=True, text=True)
         return res.stdout
-    return "Folder /fonts nie istnieje"
+    return "Brak folderu fonts"
 
-# --- NARZĘDZIA GOOGLE ---
+# --- NARZĘDZIA ---
 def get_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], 
             scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
@@ -39,19 +38,14 @@ def download_file(service, file_id):
 
 def pptx_to_pdf(input_path):
     try:
-        # LibreOffice musi wiedzieć, że pracujemy w środowisku bez ekranu
         subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
         pdf_name = os.path.basename(input_path).replace('.pptx', '.pdf')
         return pdf_name if os.path.exists(pdf_name) else None
     except: return None
 
 # --- APLIKACJA ---
-st.set_page_config(page_title="ITS WRAP - Generator PRO", layout="wide")
+st.set_page_config(page_title="ITS WRAP v4.2", layout="wide")
 font_status = install_fonts()
-
-st.sidebar.title("⚙️ Status Systemu")
-with st.sidebar.expander("Zainstalowane czcionki"):
-    st.code(font_status)
 
 st.title("🛡️ Generator Ofert ITS WRAP")
 
@@ -59,33 +53,32 @@ try:
     service, creds = get_service()
     client = gspread.authorize(creds)
     
-    # 1. Cennik
+    # Cennik
     url_arkusza = "https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link"
     sheet = client.open_by_url(url_arkusza).worksheet("Ppf")
     data = sheet.get_all_values()
     df = pd.DataFrame(data[1:], columns=[c.strip() for c in data[0]])
 
-    # 2. Pobieranie listy plików (Tylko PowerPoint)
+    # Pliki Drive
     FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
     q = f"'{FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false"
     results = service.files().list(q=q, fields="files(id, name)").execute()
     wszystkie_pliki = results.get('files', [])
 
-    # --- FORMULARZ ---
-    col1, col2 = st.columns(2)
-    with col1:
-        klient_name = st.text_input("Klient", placeholder="Jan Kowalski")
-        model_auta = st.text_input("Model Samochodu", placeholder="Tesla 3")
-        nr_oferty = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
-    with col2:
-        pakiet_usluga = st.selectbox("Pakiet", df['Usługa'].tolist())
-        manual_folia = st.text_input("Własna folia (opcjonalnie)")
-        rabat_pln = st.number_input("Rabat (PLN)", value=0)
-        foto_file = st.file_uploader("Zdjęcie auta na okładkę", type=['jpg','png','jpeg'])
+    # Formularz
+    c1, c2 = st.columns(2)
+    with c1:
+        klient = st.text_input("Klient")
+        model = st.text_input("Model Samochodu")
+        nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
+    with c2:
+        pakiet = st.selectbox("Wybierz pakiet", df['Usługa'].tolist())
+        rabat = st.number_input("Rabat (PLN)", value=0)
+        foto = st.file_uploader("Zdjęcie auta na okładkę", type=['jpg','png','jpeg'])
 
-    # Sidebar: wybór dodatków
-    st.sidebar.header("Dodatki")
-    dodatki_pliki = [f for f in wszystkie_pliki if not f['name'].startswith(('1','3','6'))]
+    # Dodatki w sidebarze (tylko pliki 4_ i 5_)
+    st.sidebar.header("Dodatki (Szyba/Powłoka)")
+    dodatki_pliki = [f for f in wszystkie_pliki if f['name'].startswith(('4','5'))]
     wybrane_extra = []
     for d in sorted(dodatki_pliki, key=lambda x: x['name']):
         if st.sidebar.checkbox(d['name'], value=False):
@@ -94,69 +87,64 @@ try:
     if st.button("🚀 GENERUJ PDF"):
         with st.spinner("Składam ofertę..."):
             writer = PdfWriter()
-            row = df[df['Usługa'] == pakiet_usluga].iloc[0]
-            
-            # Cena
+            row = df[df['Usługa'] == pakiet].iloc[0]
             cena_raw = re.sub(r'[^\d,]', '', row['Kwota sprzedaży']).replace(',', '.')
             cena_num = float(cena_raw) if cena_raw else 0.0
-            folia_final = manual_folia if manual_folia else row['Rodzaj folii']
 
             replacements = {
-                "{{KLIENT}}": klient_name, "{{MODEL_AUTA}}": model_auta,
-                "{{RODZAJ_FOLII}}": folia_final, "{{USLUGA_NAZWA}}": pakiet_usluga,
-                "{{NR_OFERTY}}": nr_oferty,
+                "{{KLIENT}}": klient, "{{MODEL_AUTA}}": model,
+                "{{RODZAJ_FOLII}}": row['Rodzaj folii'],
+                "{{USLUGA_NAZWA}}": pakiet, "{{NR_OFERTY}}": nr_o,
                 "{{CENA_KATALOG}}": f"{cena_num:,.2f} zł".replace(',', ' ').replace('.', ','),
-                "{{CENA_KONCOWA}}": f"{(cena_num - rabat_pln):,.2f} zł".replace(',', ' ').replace('.', ',')
+                "{{CENA_KONCOWA}}": f"{(cena_num - rabat):,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
-            # Kolejność bez duplikatów
-            okladka = next((f for f in wszystkie_pliki if f['name'].startswith('1')), None)
-            zakres = next((f for f in wszystkie_pliki if f['name'].startswith('3')), None)
-            koniec = next((f for f in wszystkie_pliki if f['name'].startswith('6')), None)
+            # --- KOLEJNOŚĆ AUTOMATYCZNA ---
+            okladka_f = next((f for f in wszystkie_pliki if f['name'].startswith('1')), None)
+            produkt_f = next((f for f in wszystkie_pliki if f['name'].startswith('2')), None) # XPEL Ultimate
+            zakres_f = next((f for f in wszystkie_pliki if f['name'].startswith('3')), None) # Zakres prac
+            koniec_f = next((f for f in wszystkie_pliki if f['name'].startswith('6')), None) # Stopka
 
-            pliki_to_process = [f for f in [okladka] + wybrane_extra + [zakres, koniec] if f]
+            seq = [okladka_f, produkt_f] + wybrane_extra + [zakres_f, koniec_f]
+            seq = [f for f in seq if f] # Usuwamy puste
 
-            for f_info in pliki_to_process:
+            for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
                 for slide in prs.slides:
-                    # Agresywne szukanie obrazka {{FOTO_AUTA}}
-                    if foto_file and f_info['name'].startswith('1'):
+                    # 1. ZDJĘCIE (Wysyłamy na spód)
+                    if foto and f_info['name'].startswith('1'):
                         for shape in list(slide.shapes):
-                            # Sprawdzamy tekst wewnątrz kształtu LUB nazwę kształtu
-                            found = False
                             if shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text_frame.text:
-                                found = True
-                            elif "{{FOTO_AUTA}}" in shape.name:
-                                found = True
-                            
-                            if found:
-                                slide.shapes.add_picture(foto_file, shape.left, shape.top, shape.width, shape.height)
-                                # Usuwamy tag tekstowy
+                                left, top, width, height = shape.left, shape.top, shape.width, shape.height
+                                new_pic = slide.shapes.add_picture(foto, left, top, width, height)
+                                
+                                # --- MAGIA: Przesunięcie na spód ---
+                                slide.shapes._spTree.remove(new_pic._element)
+                                slide.shapes._spTree.insert(2, new_pic._element) # 2 to pierwsza warstwa pod tekstem
+                                
                                 sp = shape._element
                                 sp.getparent().remove(sp)
 
-                    # Podmiana tekstów
+                    # 2. TEKSTY
                     for shape in slide.shapes:
                         if shape.has_text_frame:
                             for p in shape.text_frame.paragraphs:
                                 for run in p.runs:
-                                    # Hardkodujemy czcionkę po podmianie tekstu!
                                     for k, v in replacements.items():
                                         if k in run.text:
                                             run.text = run.text.replace(k, str(v))
-                                            # Wymuszamy Twoją czcionkę URW DIN
-                                            run.font.name = 'URW DIN' 
+                                            run.font.name = 'URW DIN'
 
                 tmp_p = f"tmp_{f_info['id']}.pptx"
                 prs.save(tmp_p)
-                pdf_f = pptx_to_pdf(tmp_p)
-                if pdf_f: 
-                    writer.append(pdf_f)
-                    os.remove(tmp_p); os.remove(pdf_f)
+                pdf = pptx_to_pdf(tmp_p)
+                if pdf:
+                    writer.append(pdf)
+                    os.remove(tmp_p); os.remove(pdf)
 
-            final_pdf = io.BytesIO()
-            writer.write(final_pdf); final_pdf.seek(0)
-            st.download_button("📥 POBIERZ PDF", data=final_pdf, file_name=f"Oferta_{model_auta}.pdf")
+            final = io.BytesIO()
+            writer.write(final); final.seek(0)
+            st.download_button("📥 POBIERZ PDF", data=final, file_name=f"Oferta_{model}.pdf")
 
 except Exception as e:
     st.error(f"Błąd: {e}")
