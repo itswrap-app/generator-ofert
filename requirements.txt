@@ -1,6 +1,6 @@
 streamlit
 pandas
-aspose.slides
+aspose-slides
 gspread
 google-auth
 google-api-python-client
