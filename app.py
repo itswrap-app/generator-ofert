@@ -9,7 +9,7 @@ import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
 
-# --- BAZY DANYCH (Z Twojego Reacta) ---
+# --- BAZY DANYCH SAMOCHODÓW I FOLII ---
 CAR_DATABASE = {
     "Renault": {"Scenic E-Tech": ["Crossover", "Long Range"], "Megane E-Tech": ["Hatchback"], "Austral": ["SUV"]},
     "Audi": {"A6": ["Limousine", "Avant"], "RS6": ["Avant"], "Q8": ["SUV"], "e-tron GT": ["Sedan"]},
@@ -69,13 +69,18 @@ def pptx_to_pdf(input_path):
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
 
-# Autoryzacja
+# Autoryzacja i pobranie bazy plików na start
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], 
         scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-# --- PANEL BOCZNY (STUDIO AI) ---
+FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
+q = f"'{FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false"
+results = service.files().list(q=q, fields="files(id, name)").execute()
+pliki_na_dysku = results.get('files', [])
+
+# --- PANEL BOCZNY (STUDIO AI + DODATKI) ---
 with st.sidebar:
     st.title("🚗 Studio AI")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
@@ -95,6 +100,14 @@ with st.sidebar:
             if img_data:
                 st.session_state['ai_img'] = img_data
                 st.success("Render gotowy!")
+                
+    st.markdown("---")
+    st.header("📦 Dodatki do oferty")
+    dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
+    wybrane_dodatki = []
+    for d in sorted(dodatki_dostepne, key=lambda x: x['name']):
+        if st.checkbox(d['name'], value=False):
+            wybrane_dodatki.append(d)
 
 # --- GŁÓWNY PANEL ---
 st.title("🛡️ Generator Ofert ITS WRAP")
@@ -112,16 +125,16 @@ with col1:
 
 with col2:
     if 'ai_img' in st.session_state:
-        st.image(st.session_state['ai_img'], caption="Wizualizacja AI dla oferty", use_container_width=True)
+        st.image(st.session_state['ai_img'], caption="Wizualizacja AI gotowa do druku", use_container_width=True)
     else:
-        st.info("Użyj panelu bocznego, aby wygenerować zdjęcie auta AI.")
+        st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
 # --- GENEROWANIE OFERTY ---
 if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
     if 'ai_img' not in st.session_state:
-        st.warning("Najpierw wygeneruj zdjęcie AI w panelu bocznym!")
+        st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
     else:
-        with st.spinner("Składam dokumenty..."):
+        with st.spinner("Składam profesjonalny PDF..."):
             writer = PdfWriter()
             row = df[df['Usługa'] == pakiet].iloc[0]
             cena_num = float(re.sub(r'[^\d,]', '', row['Kwota sprzedaży']).replace(',', '.'))
@@ -134,15 +147,14 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{CENA_KONCOWA}}": f"{(cena_num - rabat):,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
-            # Pobieranie plików z Drive (Okładka, XPEL, Zakres, Stopka)
-            res = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and trashed=false").execute()
-            pliki = res.get('files', [])
-            
-            # Kolejność (1, 2, 3, 6)
-            seq = [next(f for f in pliki if f['name'].startswith('1')),
-                   next(f for f in pliki if f['name'].startswith('2')),
-                   next(f for f in pliki if f['name'].startswith('3')),
-                   next(f for f in pliki if f['name'].startswith('6'))]
+            # Składanie klocków (1 -> 2 -> wybrane_dodatki -> 3 -> 6)
+            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1')), None)
+            produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+            zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
+            koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
+
+            seq = [okladka, produkt] + wybrane_dodatki + [zakres, koniec]
+            seq = [f for f in seq if f] # Czyścimy ewentualne braki
 
             for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
@@ -153,16 +165,18 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                             if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
                                 pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
                                 slide.shapes._spTree.remove(pic._element)
-                                slide.shapes._spTree.insert(2, pic._element) # Wysyłamy na spód
+                                slide.shapes._spTree.insert(2, pic._element) # Wysyłamy zdjęcie całkowicie na dół (pod teksty)
                                 shape._element.getparent().remove(shape._element)
 
-                    # Podmiana tekstów
+                    # Podmiana tekstów i wymuszenie czcionki
                     for shape in slide.shapes:
                         if shape.has_text_frame:
                             for p in shape.text_frame.paragraphs:
                                 for run in p.runs:
                                     for k, v in replacements.items():
-                                        if k in run.text: run.text = run.text.replace(k, str(v))
+                                        if k in run.text: 
+                                            run.text = run.text.replace(k, str(v))
+                                            run.font.name = 'URW DIN'
 
                 tmp_p = f"tmp_{f_info['id']}.pptx"
                 prs.save(tmp_p)
@@ -171,4 +185,4 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
             st.balloons()
-            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{model}.pdf")
+            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{brand}_{model}.pdf")
