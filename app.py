@@ -9,14 +9,11 @@ import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
 
-# --- KONFIGURACJA API AI (Z Twojego kodu React) ---
-API_KEY = st.secrets.get("GEMINI_API_KEY", "") # Dodaj klucz do Streamlit Secrets
-
-# --- BAZY DANYCH (Przeniesione z React) ---
+# --- BAZY DANYCH (Z Twojego Reacta) ---
 CAR_DATABASE = {
-    "Renault": {"Scenic E-Tech": ["Crossover"], "Megane E-Tech": ["Hatchback"], "Austral": ["SUV"]},
-    "Audi": {"A6": ["Sedan", "Avant"], "RS6": ["Avant"], "Q8": ["SUV"], "e-tron GT": ["Sedan"]},
-    "BMW": {"M3": ["Sedan"], "M4": ["Coupe"], "X5": ["SUV"], "Seria 5": ["Sedan"]},
+    "Renault": {"Scenic E-Tech": ["Crossover", "Long Range"], "Megane E-Tech": ["Hatchback"], "Austral": ["SUV"]},
+    "Audi": {"A6": ["Limousine", "Avant"], "RS6": ["Avant"], "Q8": ["SUV"], "e-tron GT": ["Sedan"]},
+    "BMW": {"M3": ["Sedan"], "M4": ["Coupe"], "X5": ["SUV"]},
     "Porsche": {"911 (992)": ["Coupe", "Cabriolet"], "Taycan": ["Sedan"], "Cayenne": ["SUV"]}
 }
 
@@ -24,37 +21,42 @@ FOIL_GROUPS = {
     "3M 2080 Series": {
         "Satin": ["Satin Black (S12)", "Satin Dark Grey (S162)", "Satin Vampire Red (S208)"],
         "Matte": ["Matte Black (M12)", "Matte Military Green (M26)"],
-        "Gloss": ["Gloss Black (G12)", "Gloss Deep Blue"]
+        "Gloss": ["Gloss Black (G12)", "Gloss White (G10)"]
     },
     "Avery Dennison SW900": {
-        "Satin": ["Satin Khaki Green", "Satin Metallic Grey"],
-        "Gloss": ["Gloss Rock Grey", "Gloss Carmine Red"]
+        "Satin": ["Satin Black", "Satin Pearl White", "Satin Khaki Green"],
+        "Gloss": ["Gloss Obsidian Black", "Gloss Rock Grey"]
     }
 }
 
 # --- FUNKCJE SYSTEMOWE ---
 def install_fonts():
-    font_src = "fonts"
-    font_dst = os.path.expanduser("~/.local/share/fonts")
+    font_src, font_dst = "fonts", os.path.expanduser("~/.local/share/fonts")
     if os.path.exists(font_src):
         if not os.path.exists(font_dst): os.makedirs(font_dst)
         for f in os.listdir(font_src):
-            if f.lower().endswith((".ttf", ".otf")):
-                shutil.copy(os.path.join(font_src, f), font_dst)
+            if f.lower().endswith((".ttf", ".otf")): shutil.copy(os.path.join(font_src, f), font_dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
 
 def generate_ai_image(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={API_KEY}"
-    payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {"sampleCount": 1}
-    }
-    response = requests.post(url, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        img_b64 = data['predictions'][0]['bytesBase64Encoded']
-        return base64.b64decode(img_b64)
+    api_key = st.secrets["GEMINI_API_KEY"]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
+    payload = {"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}}
+    try:
+        response = requests.post(url, json=payload, timeout=60)
+        if response.status_code == 200:
+            img_b64 = response.json()['predictions'][0]['bytesBase64Encoded']
+            return base64.b64decode(img_b64)
+    except Exception as e:
+        st.error(f"Błąd AI: {e}")
     return None
+
+def download_file(service, file_id):
+    request = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done: _, done = downloader.next_chunk()
+    fh.seek(0); return fh
 
 def pptx_to_pdf(input_path):
     try:
@@ -64,75 +66,109 @@ def pptx_to_pdf(input_path):
     except: return None
 
 # --- APLIKACJA ---
-st.set_page_config(page_title="Studio Ultimate & Generator Ofert", layout="wide")
+st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
 
-# Autoryzacja Google
+# Autoryzacja
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], 
         scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-st.title("Zap & Studio Ultimate")
-
-# --- SIDEBAR: KONFIGURACJA POJAZDU I FOLII ---
+# --- PANEL BOCZNY (STUDIO AI) ---
 with st.sidebar:
-    st.header("🚗 Konfigurator AI")
+    st.title("🚗 Studio AI")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
-    model_list = list(CAR_DATABASE[brand].keys())
-    model = st.selectbox("Model", model_list)
+    model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()))
     body = st.selectbox("Nadwozie", CAR_DATABASE[brand][model])
     year = st.selectbox("Rocznik", ["2025", "2024", "2023"])
     
-    st.header("🎨 Wybór Folii")
-    f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()))
-    f_cat = st.selectbox("Typ", list(FOIL_GROUPS[f_brand].keys()))
+    st.markdown("---")
+    f_brand = st.selectbox("Producent Folii", list(FOIL_GROUPS.keys()))
+    f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
     f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
 
-    if st.button("🤖 GENERUJ WIZUALIZACJĘ AI"):
-        prompt = f"Professional automotive studio photography of a {year} {brand} {model} ({body}) wrapped in {f_brand} {f_color}. STUDIO SETTING: High-end detailing garage. WALLS: Matte black. CEILING: Large white HEXAGONAL HONEYCOMB LED lights. FLOOR: Polished black epoxy with clear reflections. Sharp focus, 8k resolution."
+    if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
+        prompt = f"Professional automotive studio photography of a {year} {brand} {model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution."
         with st.spinner("AI renderuje Twoje auto..."):
             img_data = generate_ai_image(prompt)
             if img_data:
-                st.session_state['generated_img'] = img_data
-                st.success("Wizualizacja gotowa!")
-            else:
-                st.error("Błąd API Imagen. Sprawdź klucz API.")
+                st.session_state['ai_img'] = img_data
+                st.success("Render gotowy!")
 
 # --- GŁÓWNY PANEL ---
-col1, col2 = st.columns([1, 1])
+st.title("🛡️ Generator Ofert ITS WRAP")
+col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Dane do oferty")
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
-    # Pobieranie cennika z Google Sheets
-    url_arkusza = "https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link"
-    sheet = client.open_by_url(url_arkusza).worksheet("Ppf")
-    df_prices = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
-    
-    pakiet = st.selectbox("Wybierz pakiet z cennika", df_prices['Usługa'].tolist())
+    # Cennik
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
+    df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
+    pakiet = st.selectbox("Pakiet z cennika", df['Usługa'].tolist())
     rabat = st.number_input("Rabat (PLN)", value=0)
 
 with col2:
-    st.subheader("Podgląd wizualizacji")
-    if 'generated_img' in st.session_state:
-        st.image(st.session_state['generated_img'], use_container_width=True)
+    if 'ai_img' in st.session_state:
+        st.image(st.session_state['ai_img'], caption="Wizualizacja AI dla oferty", use_container_width=True)
     else:
-        st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie.")
+        st.info("Użyj panelu bocznego, aby wygenerować zdjęcie auta AI.")
 
-# --- GENEROWANIE PDF ---
-if st.button("🚀 GENERUJ I WYŚLIJ OFERTĘ PDF"):
-    if 'generated_img' not in st.session_state:
-        st.error("Najpierw wygeneruj wizualizację AI!")
+# --- GENEROWANIE OFERTY ---
+if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
+    if 'ai_img' not in st.session_state:
+        st.warning("Najpierw wygeneruj zdjęcie AI w panelu bocznym!")
     else:
-        with st.spinner("Składam ofertę PDF..."):
-            # Logika pobierania plików z Drive i podmiany tagów (jak w Twoim poprzednim kodzie)
-            # ... (TUTAJ TWOJA DOTYCHCZASOWA LOGIKA POBIERANIA I REPLACEMENTS)
+        with st.spinner("Składam dokumenty..."):
+            writer = PdfWriter()
+            row = df[df['Usługa'] == pakiet].iloc[0]
+            cena_num = float(re.sub(r'[^\d,]', '', row['Kwota sprzedaży']).replace(',', '.'))
+
+            replacements = {
+                "{{KLIENT}}": klient, "{{MODEL_AUTA}}": f"{brand} {model}",
+                "{{RODZAJ_FOLII}}": f_color, "{{USLUGA_NAZWA}}": pakiet,
+                "{{NR_OFERTY}}": nr_o,
+                "{{CENA_KATALOG}}": f"{cena_num:,.2f} zł".replace(',', ' ').replace('.', ','),
+                "{{CENA_KONCOWA}}": f"{(cena_num - rabat):,.2f} zł".replace(',', ' ').replace('.', ',')
+            }
+
+            # Pobieranie plików z Drive (Okładka, XPEL, Zakres, Stopka)
+            res = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and trashed=false").execute()
+            pliki = res.get('files', [])
             
-            # Kluczowy moment: Wstawianie wygenerowanego zdjęcia AI
-            # shape.add_picture(io.BytesIO(st.session_state['generated_img']), ...)
-            
-            st.success("Oferta wygenerowana!")
-            st.download_button("📥 POBIERZ OFERTĘ", data="...", file_name=f"Oferta_{klient}.pdf")
+            # Kolejność (1, 2, 3, 6)
+            seq = [next(f for f in pliki if f['name'].startswith('1')),
+                   next(f for f in pliki if f['name'].startswith('2')),
+                   next(f for f in pliki if f['name'].startswith('3')),
+                   next(f for f in pliki if f['name'].startswith('6'))]
+
+            for f_info in seq:
+                prs = Presentation(download_file(service, f_info['id']))
+                for slide in prs.slides:
+                    # Podmiana zdjęcia AI na okładce
+                    if f_info['name'].startswith('1'):
+                        for shape in list(slide.shapes):
+                            if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
+                                pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
+                                slide.shapes._spTree.remove(pic._element)
+                                slide.shapes._spTree.insert(2, pic._element) # Wysyłamy na spód
+                                shape._element.getparent().remove(shape._element)
+
+                    # Podmiana tekstów
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            for p in shape.text_frame.paragraphs:
+                                for run in p.runs:
+                                    for k, v in replacements.items():
+                                        if k in run.text: run.text = run.text.replace(k, str(v))
+
+                tmp_p = f"tmp_{f_info['id']}.pptx"
+                prs.save(tmp_p)
+                pdf = pptx_to_pdf(tmp_p)
+                if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
+
+            final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+            st.balloons()
+            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{model}.pdf")
