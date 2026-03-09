@@ -8,7 +8,7 @@ from googleapiclient.http import MediaIoBaseDownload
 import io
 import os
 import subprocess
-from PyPDF2 import PdfMerger
+from pypdf import PdfWriter
 
 # --- KONFIGURACJA ---
 def get_creds():
@@ -27,30 +27,30 @@ def download_file(file_id):
     return fh
 
 def pptx_to_pdf(input_pptx_path):
-    """Zamienia PPTX na PDF przy użyciu LibreOffice zainstalowanego na serwerze."""
-    output_dir = os.path.dirname(input_pptx_path)
-    # Komenda systemowa LibreOffice
-    process = subprocess.run([
-        'libreoffice', '--headless', '--convert-to', 'pdf',
-        '--outdir', output_dir, input_pptx_path
-    ], capture_output=True, text=True)
-    
-    pdf_path = input_pptx_path.replace('.pptx', '.pdf')
-    return pdf_path if os.path.exists(pdf_path) else None
+    output_dir = os.getcwd()
+    # Próba konwersji przez LibreOffice
+    try:
+        subprocess.run([
+            'libreoffice', '--headless', '--convert-to', 'pdf',
+            '--outdir', output_dir, input_pptx_path
+        ], check=True, capture_output=True)
+        pdf_path = input_pptx_path.replace('.pptx', '.pdf')
+        return pdf_path if os.path.exists(pdf_path) else None
+    except:
+        return None
 
 # --- INTERFEJS ---
-st.set_page_config(page_title="ITS WRAP - PDF Generator", layout="wide")
-st.title("🛡️ Profesjonalny Generator PDF")
+st.set_page_config(page_title="ITS WRAP - Generator PDF", layout="wide")
+st.title("🛡️ Generator Ofert ITS WRAP (Final Fix)")
 
 try:
-    # Pobieranie danych z cennika
+    # Pobieranie danych
     creds = get_creds()
     client = gspread.authorize(creds)
     url_arkusza = "https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link"
     sheet = client.open_by_url(url_arkusza).worksheet("Ppf")
     df = pd.DataFrame(sheet.get_all_values()[1:], columns=sheet.get_all_values()[0])
 
-    # Pobieranie listy plików
     FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
     service = build('drive', 'v3', credentials=creds)
     query = f"'{FOLDER_ID}' in parents and mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed = false"
@@ -66,44 +66,44 @@ try:
     klient = st.text_input("Nazwa Klienta / Auto")
     pakiet = st.selectbox("Wybierz pakiet", df[df.columns[0]].tolist())
 
-    if st.button("🔥 GENERUJ OFERTĘ PDF"):
-        with st.spinner("Składam ofertę modułowo..."):
-            merger = PdfMerger()
-            cena_kat = df[df[df.columns[0]] == pakiet][df.columns[1]].values[0]
+    if st.button("🚀 GENERUJ PDF"):
+        if not wybrane_pliki:
+            st.warning("Wybierz pliki po lewej!")
+        else:
+            with st.spinner("Składam ofertę..."):
+                writer = PdfWriter()
+                cena_kat = df[df[df.columns[0]] == pakiet][df.columns[1]].values[0]
 
-            for f_info in wybrane_pliki:
-                # 1. Pobierz plik
-                stream = download_file(f_info['id'])
-                prs = Presentation(stream)
-                
-                # 2. Podmień tekst w slajdach tego modułu
-                for slide in prs.slides:
-                    for shape in slide.shapes:
-                        if hasattr(shape, "text_frame") and shape.text_frame:
-                            for paragraph in shape.text_frame.paragraphs:
-                                for run in paragraph.runs:
-                                    if "{{KLIENT}}" in run.text: run.text = run.text.replace("{{KLIENT}}", klient)
-                                    if "{{USLUGA_NAZWA}}" in run.text: run.text = run.text.replace("{{USLUGA_NAZWA}}", pakiet)
-                                    if "{{CENA_KATALOG}}" in run.text: run.text = run.text.replace("{{CENA_KATALOG}}", str(cena_kat))
+                for f_info in wybrane_pliki:
+                    # Pobieranie i podmiana tekstu
+                    stream = download_file(f_info['id'])
+                    prs = Presentation(stream)
+                    for slide in prs.slides:
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text_frame") and shape.text_frame:
+                                for paragraph in shape.text_frame.paragraphs:
+                                    for run in paragraph.runs:
+                                        if "{{KLIENT}}" in run.text: run.text = run.text.replace("{{KLIENT}}", klient)
+                                        if "{{USLUGA_NAZWA}}" in run.text: run.text = run.text.replace("{{USLUGA_NAZWA}}", pakiet)
+                                        if "{{CENA_KATALOG}}" in run.text: run.text = run.text.replace("{{CENA_KATALOG}}", str(cena_kat))
 
-                # 3. Zapisz tymczasowo jako PPTX
-                temp_pptx = f"temp_{f_info['name']}"
-                prs.save(temp_pptx)
-                
-                # 4. Konwertuj na PDF
-                temp_pdf = pptx_to_pdf(temp_pptx)
-                if temp_pdf:
-                    merger.append(temp_pdf)
-                    os.remove(temp_pptx)
-                    os.remove(temp_pdf)
+                    # Zapis tymczasowy i konwersja
+                    temp_name = f"temp_{f_info['id']}.pptx"
+                    prs.save(temp_name)
+                    pdf_file = pptx_to_pdf(temp_name)
+                    
+                    if pdf_file:
+                        writer.append(pdf_file)
+                        os.remove(temp_name)
+                        os.remove(pdf_file)
 
-            # 5. Sklej wszystko w jeden PDF
-            final_pdf_io = io.BytesIO()
-            merger.write(final_pdf_io)
-            final_pdf_io.seek(0)
+                # Finalny PDF
+                final_output = io.BytesIO()
+                writer.write(final_output)
+                final_output.seek(0)
 
-            st.balloons()
-            st.download_button("📥 POBIERZ GOTOWĄ OFERTĘ (PDF)", data=final_pdf_io, file_name=f"Oferta_{klient}.pdf", mime="application/pdf")
+                st.balloons()
+                st.download_button("📥 POBIERZ PDF", data=final_output, file_name=f"Oferta_{klient}.pdf", mime="application/pdf")
 
 except Exception as e:
     st.error(f"Błąd: {e}")
