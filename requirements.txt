@@ -4,3 +4,4 @@ python-pptx
 gspread
 google-auth
 google-api-python-client
+lxml
