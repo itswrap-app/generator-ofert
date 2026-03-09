@@ -8,7 +8,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import io
 
-# --- AUTORYZACJA I DRIVE ---
+# --- AUTORYZACJA I DRIVE (bez zmian) ---
 def get_creds():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     return Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
@@ -51,17 +51,16 @@ def replace_text_in_prs(prs, replacements):
 
 def replace_image_in_slide(slide, placeholder_alt_text, new_image_stream):
     for shape in slide.shapes:
-        # Próba znalezienia zdjęcia po tekście alternatywnym
         try:
+            # Próba odczytu tekstu alternatywnego w nowoczesny sposób
             alt_text = shape.non_visual_properties.name
-            if not alt_text: # Jeśli puste, szukamy głębiej w XML
+            if not alt_text:
                 alt_text = shape._element.xpath('.//p14:nvVisualPropPr/p14:altText')[0]
         except:
-            alt_text = ""
+            alt_text = shape.name if hasattr(shape, 'name') else ""
 
-        if placeholder_alt_text in alt_text or shape.name == placeholder_alt_text:
+        if placeholder_alt_text in alt_text:
             left, top, width, height = shape.left, shape.top, shape.width, shape.height
-            # Usuwamy stary kształt i wstawiamy zdjęcie
             spTree = shape._element.getparent()
             spTree.remove(shape._element)
             slide.shapes.add_picture(new_image_stream, left, top, width, height)
@@ -114,24 +113,29 @@ try:
                 base_stream = download_file(wybrane_pliki[0]['id'])
                 final_prs = Presentation(base_stream)
                 replace_text_in_prs(final_prs, replacements)
+                
                 if foto:
                     for slide in final_prs.slides:
                         replace_image_in_slide(slide, "{{FOTO_AUTA}}", foto)
 
-                # Doklejamy resztę
+                # Doklejamy resztę prezentacji
                 for f_info in wybrane_pliki[1:]:
                     sub_stream = download_file(f_info['id'])
                     sub_prs = Presentation(sub_stream)
                     replace_text_in_prs(sub_prs, replacements)
                     
+                    # Używamy pierwszego dostępnego layoutu (indeks 0), żeby uniknąć błędu out of range
+                    blank_layout = final_prs.slide_layouts[0] 
+                    
                     for slide in sub_prs.slides:
-                        # Dodajemy pusty slajd o tym samym layoutcie
-                        blank_slide_layout = final_prs.slide_layouts[6] # Zazwyczaj pusty
-                        new_slide = final_prs.slides.add_slide(blank_slide_layout)
+                        new_slide = final_prs.slides.add_slide(blank_layout)
                         
-                        # Kopiujemy kształty bezpieczną metodą XML
+                        # Czyścimy nowy slajd z domyślnych pól (np. "Kliknij aby dodać tytuł")
+                        for shp in new_slide.shapes:
+                            new_slide.shapes._spTree.remove(shp.element)
+
+                        # Kopiujemy kształty z oryginalnego slajdu
                         for shape in slide.shapes:
-                            # Używamy parse_xml, aby przenieść definicje namespaces
                             new_shape_xml = parse_xml(shape.element.xml)
                             new_slide.shapes._spTree.append(new_shape_xml)
 
