@@ -1,2 +1,2 @@
-libgdiplus
-libc6-dev
+libreoffice
+libgl1-mesa-glx
