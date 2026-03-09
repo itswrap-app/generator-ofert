@@ -11,8 +11,31 @@ import subprocess
 from pypdf import PdfWriter
 from datetime import datetime
 import re
+import shutil
 
-# --- AUTORYZACJA ---
+# --- INSTALACJA CZCIONEK ---
+def install_custom_fonts():
+    """Kopiuje czcionki z folderu /fonts do systemowego folderu czcionek Linuxa."""
+    try:
+        font_src = "fonts"
+        font_dst = os.path.expanduser("~/.local/share/fonts")
+        
+        if os.path.exists(font_src):
+            if not os.path.exists(font_dst):
+                os.makedirs(font_dst)
+            
+            for font_file in os.listdir(font_src):
+                if font_file.endswith((".ttf", ".otf")):
+                    shutil.copy(os.path.join(font_src, font_file), font_dst)
+            
+            # Odświeżenie cache czcionek w systemie
+            subprocess.run(["fc-cache", "-f", "-v"], capture_output=True)
+            return True
+    except Exception as e:
+        st.sidebar.error(f"Nie udało się zainstalować czcionek: {e}")
+    return False
+
+# --- KONFIGURACJA ---
 def get_creds():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     return Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
@@ -46,9 +69,13 @@ def clean_price(price_str):
     try: return float(cleaned)
     except: return 0.0
 
-# --- INTERFEJS ---
+# --- START APLIKACJI ---
 st.set_page_config(page_title="ITS WRAP - Generator Ofert", layout="wide")
+fonts_ok = install_custom_fonts()
+
 st.title("🛡️ Generator Ofert ITS WRAP")
+if fonts_ok:
+    st.sidebar.success("✅ Czcionki firmowe URW DIN zainstalowane")
 
 try:
     # 1. Dane z Cennika
@@ -70,7 +97,7 @@ try:
     with col1:
         klient = st.text_input("Imię i Nazwisko Klienta")
         model_auta = st.text_input("Model Samochodu")
-        rodzaj_folii = st.text_input("Rodzaj Folii (jeśli inna niż w cenniku)")
+        rodzaj_folii = st.text_input("Rodzaj Folii (opcjonalnie)")
         nr_oferty = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
     with col2:
@@ -79,17 +106,14 @@ try:
         foto = st.file_uploader("Zdjęcie auta na okładkę", type=['jpg', 'png', 'jpeg'])
 
     if st.button("🚀 GENERUJ OFERTĘ PDF"):
-        with st.spinner("Składam ofertę..."):
+        with st.spinner("Składam ofertę i renderuję PDF..."):
             writer = PdfWriter()
             
-            # Pobranie danych z cennika
             wiersz = df[df['Usługa'] == pakiet].iloc[0]
             cena_kat_str = wiersz['Kwota sprzedaży']
             folia_cennik = wiersz['Rodzaj folii']
             
-            # Używamy folii z cennika, chyba że wpisano własną
             folia_final = rodzaj_folii if rodzaj_folii else folia_cennik
-            
             cena_num = clean_price(cena_kat_str)
             cena_koncowa = cena_num - rabat
 
@@ -103,15 +127,12 @@ try:
                 "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
-            # --- LOGIKA WYBORU PLIKÓW (Bez duplikatów) ---
+            # KOLEJNOŚĆ
             okladka_f = next((f for f in pliki_na_dysku if f['name'].startswith("1_")), None)
             zakres_f = next((f for f in pliki_na_dysku if f['name'].startswith("3_")), None)
             koniec_f = next((f for f in pliki_na_dysku if f['name'].startswith("6_")), None)
-            
-            # Dodatki to TYLKO pliki, które NIE są 1, 3 ani 6
             dodatki = [f for f in pliki_na_dysku if not f['name'].startswith(("1", "3", "6"))]
             
-            # Budujemy listę: Najpierw okładka, potem dodatki, potem zakres, potem koniec
             final_sequence = []
             if okladka_f: final_sequence.append(okladka_f)
             final_sequence.extend(sorted(dodatki, key=lambda x: x['name']))
@@ -123,7 +144,7 @@ try:
                 prs = Presentation(stream)
                 
                 for slide in prs.slides:
-                    # 1. Podmiana tekstów
+                    # Tekst
                     for shape in slide.shapes:
                         if shape.has_text_frame:
                             for paragraph in shape.text_frame.paragraphs:
@@ -132,19 +153,15 @@ try:
                                         if k in run.text:
                                             run.text = run.text.replace(k, str(v))
                     
-                    # 2. Podmiana zdjęcia {{FOTO_AUTA}}
+                    # Zdjęcie na okładce
                     if foto and f_info['name'].startswith("1_"):
                         for shape in slide.shapes:
-                            # Szukamy kształtu z tagiem w nazwie lub alt-texcie
-                            search_text = (shape.name + (shape.non_visual_properties.name or "")).upper()
-                            if "{{FOTO_AUTA}}" in search_text:
+                            if "{{FOTO_AUTA}}" in shape.name:
                                 left, top, width, height = shape.left, shape.top, shape.width, shape.height
                                 slide.shapes.add_picture(foto, left, top, width, height)
-                                # Usuwamy placeholder
                                 shape_element = shape._element
                                 shape_element.getparent().remove(shape_element)
 
-                # Zapis i konwersja
                 temp_pptx = f"temp_{f_info['id']}.pptx"
                 prs.save(temp_pptx)
                 pdf_path = pptx_to_pdf(temp_pptx)
@@ -156,6 +173,7 @@ try:
             final_pdf_stream = io.BytesIO()
             writer.write(final_pdf_stream)
             final_pdf_stream.seek(0)
+            st.balloons()
             st.download_button("📥 POBIERZ PDF", data=final_pdf_stream, file_name=f"Oferta_{model_auta}.pdf")
 
 except Exception as e:
