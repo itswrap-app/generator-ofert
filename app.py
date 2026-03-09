@@ -9,23 +9,74 @@ import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
 
-# --- BAZY DANYCH SAMOCHODÓW I FOLII ---
+# --- PEŁNA BAZA SAMOCHODÓW ---
 CAR_DATABASE = {
-    "Renault": {"Scenic E-Tech": ["Crossover", "Long Range"], "Megane E-Tech": ["Hatchback"], "Austral": ["SUV"]},
-    "Audi": {"A6": ["Limousine", "Avant"], "RS6": ["Avant"], "Q8": ["SUV"], "e-tron GT": ["Sedan"]},
-    "BMW": {"M3": ["Sedan"], "M4": ["Coupe"], "X5": ["SUV"]},
-    "Porsche": {"911 (992)": ["Coupe", "Cabriolet"], "Taycan": ["Sedan"], "Cayenne": ["SUV"]}
+    "Renault": {
+        "Scenic E-Tech": ["Crossover", "Long Range"], "Megane E-Tech": ["Hatchback"], 
+        "Talisman": ["Sedan", "Grandtour (Kombi)"], "Clio V": ["Hatchback"], 
+        "Captur": ["SUV"], "Arkana": ["SUV Coupe"], "Rafale": ["SUV Coupe"], 
+        "Espace VI": ["SUV"], "Austral": ["SUV"]
+    },
+    "Audi": {
+        "A3": ["Sportback (Hatchback)", "Limousine (Sedan)"], 
+        "A4": ["Limousine (Sedan)", "Avant (Kombi)", "Allroad"], 
+        "A5": ["Coupe", "Sportback", "Cabriolet"], 
+        "A6": ["Limousine (Sedan)", "Avant (Kombi)", "Allroad"], 
+        "RS6": ["Avant (Kombi)"], "Q3": ["SUV", "Sportback"], 
+        "Q5": ["SUV", "Sportback"], "Q8": ["SUV"], "e-tron GT": ["Sedan"]
+    },
+    "BMW": {
+        "Seria 3": ["Sedan", "Touring (Kombi)"], "Seria 4": ["Coupe", "Gran Coupe", "Cabriolet"], 
+        "Seria 5": ["Sedan", "Touring (Kombi)"], "X3": ["SUV"], "X5": ["SUV"], 
+        "X6": ["SUV Coupe"], "M3": ["Sedan", "Touring (Kombi)"], "M4": ["Coupe", "Cabriolet"]
+    },
+    "Mercedes-Benz": {
+        "Klasa C": ["Limuzyna (Sedan)", "Kombi", "Coupe", "Cabriolet"], 
+        "Klasa E": ["Limuzyna (Sedan)", "Kombi", "Coupe", "Cabriolet"], 
+        "CLA": ["Coupe", "Shooting Brake (Kombi)"], "GLC": ["SUV", "Coupe"], 
+        "GLE": ["SUV", "Coupe"], "Klasa G": ["SUV"]
+    },
+    "Volkswagen": {
+        "Golf VIII": ["Hatchback", "Variant (Kombi)"], "Passat": ["Variant (Kombi)", "Sedan"], 
+        "Arteon": ["Fastback", "Shooting Brake (Kombi)"], "ID.3": ["Hatchback"], 
+        "ID.4": ["SUV"], "ID.Buzz": ["Van"]
+    },
+    "Toyota": {
+        "Corolla": ["Hatchback", "Sedan", "Touring Sports (Kombi)"], "Yaris": ["Hatchback"], 
+        "RAV4": ["SUV"], "Camry": ["Sedan"], "C-HR": ["Crossover"]
+    },
+    "Skoda": {
+        "Octavia": ["Liftback", "Combi"], "Superb": ["Liftback", "Combi"], 
+        "Kodiaq": ["SUV"], "Enyaq": ["SUV", "Coupe"]
+    },
+    "Ford": {
+        "Focus": ["Hatchback", "Kombi"], "Mondeo": ["Sedan", "Kombi", "Liftback"], 
+        "Mustang": ["Fastback", "Convertible", "Mach-E (SUV)"]
+    },
+    "Porsche": {
+        "911 (992)": ["Coupe", "Cabriolet", "Targa"], "Taycan": ["Sedan", "Cross Turismo", "Sport Turismo"], 
+        "Panamera": ["Sedan", "Sport Turismo"], "Cayenne": ["SUV", "Coupe"]
+    }
 }
 
+# --- PEŁNA BAZA FOLII ---
 FOIL_GROUPS = {
     "3M 2080 Series": {
-        "Satin": ["Satin Black (S12)", "Satin Dark Grey (S162)", "Satin Vampire Red (S208)"],
-        "Matte": ["Matte Black (M12)", "Matte Military Green (M26)"],
-        "Gloss": ["Gloss Black (G12)", "Gloss White (G10)"]
+        "Matte (Matowe)": ["Matte Black (M12)", "Matte Deep Black (M22)", "Matte Dark Grey (M261)", "Matte White (M10)", "Matte Military Green (M26)", "Matte Pine Green (M206)", "Matte Blue Metallic (M227)", "Matte Slate Blue (M217)"],
+        "Satin (Satynowe)": ["Satin Black (S12)", "Satin Gold Dust Black (SP242)", "Satin Dark Grey (S162)", "Satin White (S10)", "Satin Frozen Vanilla (S126)", "Satin Key West (S378)", "Satin Perfect Blue (S347)", "Satin Vampire Red (S208)"],
+        "Gloss (Połysk)": ["Gloss Black (G12)", "Gloss White (G10)", "Gloss Hot Rod Red (G13)", "Gloss Sky Blue (G77)", "Gloss Dragon Red (G212)", "Gloss Intense Blue (G47)", "Gloss Bright Yellow (G15)"],
+        "Color Flip (Kameleon)": ["Gloss Flip Electric Wave (GP287)", "Satin Flip Volcanic Flare (SP236)", "Gloss Flip Deep Space (GP278)", "Satin Flip Caribbean Shimmer (SP276)"]
     },
     "Avery Dennison SW900": {
-        "Satin": ["Satin Black", "Satin Pearl White", "Satin Khaki Green"],
-        "Gloss": ["Gloss Obsidian Black", "Gloss Rock Grey"]
+        "Satin": ["Satin Black", "Satin White", "Satin Pearl White", "Satin Carmine Red", "Satin Khaki Green", "Satin Hope Green", "Satin Dark Basalt", "Satin Metallic Grey"],
+        "Gloss": ["Gloss Black", "Gloss White", "Gloss Obsidian Black", "Gloss Rock Grey", "Gloss Grey Metallic", "Gloss Carmine Red", "Gloss Ambulance Yellow", "Gloss Sea Breeze Blue"],
+        "ColorFlow (Kameleon)": ["Rising Sun (Red/Gold)", "Urban Jungle (Green/Purple)", "Roaring Thunder (Blue/Red)", "Fresh Spring (Gold/Silver)"],
+        "Matte": ["Matte Black", "Matte White", "Matte Charcoal Metallic", "Matte Night Blue Metallic", "Matte Olive Green"]
+    },
+    "Oracal 970RA": {
+        "Shift Effect": ["Gloss Avocado", "Gloss Amethyst", "Gloss Cranberry", "Gloss Aquamarine"],
+        "Special": ["Gloss Telegrey", "Gloss Nardo Grey Style", "Matte Nato Olive", "Gloss Police Blue", "Gloss Taxi Beige"],
+        "Metallic": ["Gloss Graphite Metallic", "Matte Anthracite Metallic", "Gloss Pyrite", "Gloss Silver Grey"]
     }
 }
 
@@ -83,18 +134,19 @@ pliki_na_dysku = results.get('files', [])
 # --- PANEL BOCZNY (STUDIO AI + DODATKI) ---
 with st.sidebar:
     st.title("🚗 Studio AI")
-    brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
-    model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()))
+    brand = st.selectbox("Marka", sorted(list(CAR_DATABASE.keys())))
+    model = st.selectbox("Model", sorted(list(CAR_DATABASE[brand].keys())))
     body = st.selectbox("Nadwozie", CAR_DATABASE[brand][model])
-    year = st.selectbox("Rocznik", ["2025", "2024", "2023"])
+    year = st.selectbox("Rocznik", [str(y) for y in range(2026, 1999, -1)])
     
     st.markdown("---")
-    f_brand = st.selectbox("Producent Folii", list(FOIL_GROUPS.keys()))
+    st.title("🎨 Folia i Kolor")
+    f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()))
     f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
     f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
 
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
-        prompt = f"Professional automotive studio photography of a {year} {brand} {model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution."
+        prompt = f"Professional automotive studio photography of a {year} {brand} {model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. Floor: polished black epoxy with clear reflections."
         with st.spinner("AI renderuje Twoje auto..."):
             img_data = generate_ai_image(prompt)
             if img_data:
@@ -125,7 +177,7 @@ with col1:
 
 with col2:
     if 'ai_img' in st.session_state:
-        st.image(st.session_state['ai_img'], caption="Wizualizacja AI gotowa do druku", use_container_width=True)
+        st.image(st.session_state['ai_img'], caption=f"Wizualizacja: {brand} {model} w folii {f_color}", use_container_width=True)
     else:
         st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
@@ -154,7 +206,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
             seq = [okladka, produkt] + wybrane_dodatki + [zakres, koniec]
-            seq = [f for f in seq if f] # Czyścimy ewentualne braki
+            seq = [f for f in seq if f]
 
             for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
@@ -165,7 +217,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                             if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
                                 pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
                                 slide.shapes._spTree.remove(pic._element)
-                                slide.shapes._spTree.insert(2, pic._element) # Wysyłamy zdjęcie całkowicie na dół (pod teksty)
+                                slide.shapes._spTree.insert(2, pic._element) # Wysyłamy zdjęcie na spód
                                 shape._element.getparent().remove(shape._element)
 
                     # Podmiana tekstów i wymuszenie czcionki
