@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
-from pptx.oxml import parse_xml
+from pptx.util import Inches
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import io
 
-# --- AUTORYZACJA I DRIVE (bez zmian) ---
+# --- AUTORYZACJA ---
 def get_creds():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     return Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
@@ -37,114 +37,90 @@ def download_file(file_id):
     fh.seek(0)
     return fh
 
-# --- OBRÓBKA SLAJDÓW ---
+# --- FUNKCJE NAPRAWCZE ---
 
-def replace_text_in_prs(prs, replacements):
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                for paragraph in shape.text_frame.paragraphs:
-                    for run in paragraph.runs:
-                        for key, value in replacements.items():
-                            if key in run.text:
-                                run.text = run.text.replace(key, str(value))
-
-def replace_image_in_slide(slide, placeholder_alt_text, new_image_stream):
+def replace_text_in_slide(slide, replacements):
     for shape in slide.shapes:
-        try:
-            # Próba odczytu tekstu alternatywnego w nowoczesny sposób
-            alt_text = shape.non_visual_properties.name
-            if not alt_text:
-                alt_text = shape._element.xpath('.//p14:nvVisualPropPr/p14:altText')[0]
-        except:
-            alt_text = shape.name if hasattr(shape, 'name') else ""
+        if shape.has_text_frame:
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    for key, value in replacements.items():
+                        if key in run.text:
+                            run.text = run.text.replace(key, str(value))
 
-        if placeholder_alt_text in alt_text:
-            left, top, width, height = shape.left, shape.top, shape.width, shape.height
-            spTree = shape._element.getparent()
-            spTree.remove(shape._element)
-            slide.shapes.add_picture(new_image_stream, left, top, width, height)
+def move_slide_elements(source_slide, target_slide):
+    """Kopiuje elementy ze slajdu źródłowego do docelowego, zachowując obrazy."""
+    for shape in source_slide.shapes:
+        if shape.shape_type == 13: # To jest obraz (Picture)
+            img_stream = io.BytesIO(shape.image.blob)
+            target_slide.shapes.add_picture(img_stream, shape.left, shape.top, shape.width, shape.height)
+        elif shape.has_text_frame:
+            # Tworzymy nowe pole tekstowe i kopiujemy treść
+            new_shape = target_slide.shapes.add_textbox(shape.left, shape.top, shape.width, shape.height)
+            new_shape.text_frame.text = shape.text_frame.text
+        # Można tu dodać inne typy kształtów, jeśli ich używasz (np. linie, prostokąty)
 
 # --- INTERFEJS ---
-st.set_page_config(page_title="ITS WRAP - Generator LEGO", layout="wide")
-st.title("🛡️ Generator Ofert ITS WRAP")
+st.title("🛡️ Generator Ofert ITS WRAP v2.0")
 
 try:
     df = get_data()
     FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
-    
     query = f"'{FOLDER_ID}' in parents and mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed = false"
     service = get_drive_service()
     results = service.files().list(q=query, fields="files(id, name)").execute()
     pliki_na_dysku = results.get('files', [])
 
-    st.sidebar.header("Wybierz klocki")
+    st.sidebar.header("Składniki")
     wybrane_pliki = []
     for f in sorted(pliki_na_dysku, key=lambda x: x['name']):
         if st.sidebar.checkbox(f"{f['name']}", value=True):
             wybrane_pliki.append(f)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        klient = st.text_input("Nazwa Klienta / Auto")
-        pakiet = st.selectbox("Pakiet z cennika", df[df.columns[0]].tolist())
-    with col2:
-        foto = st.file_uploader("Zdjęcie na okładkę", type=['jpg', 'png', 'jpeg'])
-        rabat = st.number_input("Rabat kwotowy (PLN)", value=0)
+    klient = st.text_input("Klient / Auto")
+    pakiet = st.selectbox("Pakiet", df[df.columns[0]].tolist())
+    foto_okladka = st.file_uploader("Zdjęcie na okładkę", type=['jpg', 'png'])
 
-    if st.button("🚀 GENERUJ GOTOWĄ OFERTĘ"):
-        if not wybrane_pliki:
-            st.warning("Zaznacz pliki po lewej!")
-        else:
-            with st.spinner("Składam ofertę..."):
-                # Dane do podmiany
-                wiersz_ceny = df[df[df.columns[0]] == pakiet]
-                cena_kat = wiersz_ceny[df.columns[1]].values[0]
-                cena_num = float(''.join(filter(str.isdigit, str(cena_kat).replace(',','.'))))
-                cena_koncowa = cena_num - rabat
+    if st.button("🚀 GENERUJ OFERTĘ"):
+        with st.spinner("Składam ofertę..."):
+            # Dane do podmiany
+            wiersz = df[df[df.columns[0]] == pakiet]
+            cena_kat = wiersz[df.columns[1]].values[0]
+            
+            replacements = {
+                "{{USLUGA_NAZWA}}": pakiet,
+                "{{CENA_KATALOG}}": f"{cena_kat}",
+                "{{CENA_KONCOWA}}": f"{cena_kat}" # Uproszczone dla testu
+            }
+
+            # 1. Tworzymy całkiem nową, czystą prezentację
+            final_prs = Presentation()
+            # Ustawiamy rozmiar slajdu na 16:9 (standardowy)
+            final_prs.slide_width = Inches(13.333)
+            final_prs.slide_height = Inches(7.5)
+
+            for f_info in wybrane_pliki:
+                stream = download_file(f_info['id'])
+                source_prs = Presentation(stream)
                 
-                replacements = {
-                    "{{USLUGA_NAZWA}}": pakiet,
-                    "{{CENA_KATALOG}}": f"{cena_kat}",
-                    "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ',')
-                }
-
-                # Startujemy od pierwszego pliku
-                base_stream = download_file(wybrane_pliki[0]['id'])
-                final_prs = Presentation(base_stream)
-                replace_text_in_prs(final_prs, replacements)
-                
-                if foto:
-                    for slide in final_prs.slides:
-                        replace_image_in_slide(slide, "{{FOTO_AUTA}}", foto)
-
-                # Doklejamy resztę prezentacji
-                for f_info in wybrane_pliki[1:]:
-                    sub_stream = download_file(f_info['id'])
-                    sub_prs = Presentation(sub_stream)
-                    replace_text_in_prs(sub_prs, replacements)
+                for slide in source_prs.slides:
+                    # Dodajemy nowy slajd do naszej głównej prezentacji
+                    new_slide = final_prs.slides.add_slide(final_prs.slide_layouts[6]) # Pusty layout
                     
-                    # Używamy pierwszego dostępnego layoutu (indeks 0), żeby uniknąć błędu out of range
-                    blank_layout = final_prs.slide_layouts[0] 
+                    # Kopiujemy elementy i podmieniamy teksty
+                    replace_text_in_slide(slide, replacements)
+                    move_slide_elements(slide, new_slide)
                     
-                    for slide in sub_prs.slides:
-                        new_slide = final_prs.slides.add_slide(blank_layout)
-                        
-                        # Czyścimy nowy slajd z domyślnych pól (np. "Kliknij aby dodać tytuł")
-                        for shp in new_slide.shapes:
-                            new_slide.shapes._spTree.remove(shp.element)
+                    # Jeśli to okładka i wgrano zdjęcie
+                    if "okładka" in f_info['name'].lower() and foto_okladka:
+                        new_slide.shapes.add_picture(foto_okladka, Inches(1), Inches(1), width=Inches(5))
 
-                        # Kopiujemy kształty z oryginalnego slajdu
-                        for shape in slide.shapes:
-                            new_shape_xml = parse_xml(shape.element.xml)
-                            new_slide.shapes._spTree.append(new_shape_xml)
-
-                output = io.BytesIO()
-                final_prs.save(output)
-                output.seek(0)
-
-                st.balloons()
-                st.download_button(label="📥 POBIERZ OFERTĘ (PPTX)", data=output, file_name=f"Oferta_{klient}.pptx")
+            output = io.BytesIO()
+            final_prs.save(output)
+            output.seek(0)
+            
+            st.success("Gotowe!")
+            st.download_button("📥 POBIERZ PPTX", data=output, file_name=f"Oferta_{klient}.pptx")
 
 except Exception as e:
-    st.error(f"Wystąpił problem: {e}")
+    st.error(f"Błąd: {e}")
