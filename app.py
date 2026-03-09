@@ -13,7 +13,7 @@ def get_data():
     client = gspread.authorize(creds)
     
     # TUTAJ WKLEJ SWÓJ LINK DO ARKUSZA (Zostaw cudzysłowy!)
-    url_arkusza = "https://share.streamlit.io/?aliId=eyJpIjoickRrdWdROUM4RnltbTU2MyIsInQiOiI2elY2ak14TkJwUEJBRERDT0xrRkFRPT0ifQ%253D%253D"
+    url_arkusza = "https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link"
     
     sheet = client.open_by_url(url_arkusza).worksheet("Ppf")
     return pd.DataFrame(sheet.get_all_records())
