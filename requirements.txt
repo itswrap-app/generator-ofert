@@ -1,7 +1,6 @@
 streamlit
 pandas
-python-pptx
+aspose.slides
 gspread
 google-auth
 google-api-python-client
-lxml
