@@ -89,7 +89,13 @@ try:
     # 2. Pliki z Drive
     FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
     service = build('drive', 'v3', credentials=creds)
-    results = service.files().list(q=f"'{FOLDER_ID}' in parents and trashed=false", fields="files(id, name)").execute()
+    
+    # TUTAJ DODAJEMY FILTR NA MIME_TYPE (tylko PowerPointy)
+    query = (f"'{FOLDER_ID}' in parents and "
+             f"mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' and "
+             f"trashed = false")
+    
+    results = service.files().list(q=query, fields="files(id, name)").execute()
     pliki_na_dysku = results.get('files', [])
 
     # --- FORMULARZ ---
