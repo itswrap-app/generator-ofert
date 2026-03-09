@@ -1,1 +1,2 @@
 libgdiplus
+libc6-dev
