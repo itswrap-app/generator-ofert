@@ -96,15 +96,19 @@ creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"],
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
+# Pobranie plików z Google Drive
 results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
+
+# Pobranie Cennika
+sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
+df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
     st.title("🚗 Studio AI")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
     
-    # Obsługa wpisywania ręcznego
     if brand == "Inna marka...":
         custom_brand = st.text_input("Wpisz markę")
         custom_model = st.text_input("Wpisz model")
@@ -122,13 +126,11 @@ with st.sidebar:
     f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
     f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
 
-    # LOGIKA DLA FOLII BEZBARWNYCH (XPEL)
     paint_color = ""
     if "Bezbarwne" in f_cat:
         paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
 
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
-        # Budowanie promptu z uwzględnieniem koloru lakieru
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
             prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
@@ -154,10 +156,25 @@ with col1:
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
-    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
-    df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
+    # Wybór pakietu
     pakiet = st.selectbox("Pakiet z cennika", df['Usługa'].tolist())
-    rabat = st.number_input("Rabat (PLN)", value=0)
+    
+    # Wyszukanie ceny domyślnej w ułamku sekundy
+    wiersz = df[df['Usługa'] == pakiet].iloc[0]
+    try:
+        cena_domyslna = float(re.sub(r'[^\d,]', '', wiersz['Kwota sprzedaży']).replace(',', '.'))
+    except:
+        cena_domyslna = 0.0
+
+    st.markdown("---")
+    st.write("💰 **Kalkulacja cenowa**")
+    
+    # Nowe kontrolki cenowe (z możliwością ręcznej edycji!)
+    cena_manual = st.number_input("Cena bazowa (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
+    rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
+    cena_koncowa = cena_manual - rabat
+    
+    st.info(f"**Cena do zapłaty (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', ' ').replace('.', ','))
 
 with col2:
     if 'ai_img' in st.session_state:
@@ -172,24 +189,24 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
     else:
         with st.spinner("Składam profesjonalny PDF..."):
             writer = PdfWriter()
-            row = df[df['Usługa'] == pakiet].iloc[0]
-            cena_num = float(re.sub(r'[^\d,]', '', row['Kwota sprzedaży']).replace(',', '.'))
 
-            # Jeśli wybrano PPF bezbarwny, dodajemy info o kolorze lakieru do PDF
             final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
 
+            # Podmieniamy teraz na kwoty z edytowalnych okienek, a nie prosto z bazy
             replacements = {
-                "{{KLIENT}}": klient, "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
-                "{{RODZAJ_FOLII}}": final_foil_text, "{{USLUGA_NAZWA}}": pakiet,
+                "{{KLIENT}}": klient, 
+                "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
+                "{{RODZAJ_FOLII}}": final_foil_text, 
+                "{{USLUGA_NAZWA}}": pakiet,
                 "{{NR_OFERTY}}": nr_o,
-                "{{CENA_KATALOG}}": f"{cena_num:,.2f} zł".replace(',', ' ').replace('.', ','),
-                "{{CENA_KONCOWA}}": f"{(cena_num - rabat):,.2f} zł".replace(',', ' ').replace('.', ',')
+                "{{CENA_KATALOG}}": f"{cena_manual:,.2f} zł".replace(',', ' ').replace('.', ','),
+                "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
             # 1. OKŁADKA
             okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1')), None)
             
-            # 2. INTELIGENTNY WYBÓR STRONY PRODUKTOWEJ
+            # 2. STRONA PRODUKTOWA (Rozpoznawanie XPEL)
             produkt = None
             if "Ultimate" in f_color:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
@@ -198,7 +215,6 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             elif "Color" in f_cat:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
             
-            # Jeśli nie znalazł konkretnego XPEL, bierze domyślny plik 2_
             if not produkt:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
 
