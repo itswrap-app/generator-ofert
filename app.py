@@ -106,7 +106,7 @@ df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
-    st.title("🚗 Studio AI")
+    st.title("🚗 Wybierz auto")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
     
     if brand == "Inna marka...":
