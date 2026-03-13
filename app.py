@@ -11,72 +11,51 @@ from datetime import datetime
 
 # --- PEŁNA BAZA SAMOCHODÓW ---
 CAR_DATABASE = {
-    "Renault": {
-        "Scenic E-Tech": ["Crossover", "Long Range"], "Megane E-Tech": ["Hatchback"], 
-        "Talisman": ["Sedan", "Grandtour (Kombi)"], "Clio V": ["Hatchback"], 
-        "Captur": ["SUV"], "Arkana": ["SUV Coupe"], "Rafale": ["SUV Coupe"], 
-        "Espace VI": ["SUV"], "Austral": ["SUV"]
-    },
-    "Audi": {
-        "A3": ["Sportback (Hatchback)", "Limousine (Sedan)"], 
-        "A4": ["Limousine (Sedan)", "Avant (Kombi)", "Allroad"], 
-        "A5": ["Coupe", "Sportback", "Cabriolet"], 
-        "A6": ["Limousine (Sedan)", "Avant (Kombi)", "Allroad"], 
-        "RS6": ["Avant (Kombi)"], "Q3": ["SUV", "Sportback"], 
-        "Q5": ["SUV", "Sportback"], "Q8": ["SUV"], "e-tron GT": ["Sedan"]
-    },
-    "BMW": {
-        "Seria 3": ["Sedan", "Touring (Kombi)"], "Seria 4": ["Coupe", "Gran Coupe", "Cabriolet"], 
-        "Seria 5": ["Sedan", "Touring (Kombi)"], "X3": ["SUV"], "X5": ["SUV"], 
-        "X6": ["SUV Coupe"], "M3": ["Sedan", "Touring (Kombi)"], "M4": ["Coupe", "Cabriolet"]
-    },
-    "Mercedes-Benz": {
-        "Klasa C": ["Limuzyna (Sedan)", "Kombi", "Coupe", "Cabriolet"], 
-        "Klasa E": ["Limuzyna (Sedan)", "Kombi", "Coupe", "Cabriolet"], 
-        "CLA": ["Coupe", "Shooting Brake (Kombi)"], "GLC": ["SUV", "Coupe"], 
-        "GLE": ["SUV", "Coupe"], "Klasa G": ["SUV"]
-    },
-    "Volkswagen": {
-        "Golf VIII": ["Hatchback", "Variant (Kombi)"], "Passat": ["Variant (Kombi)", "Sedan"], 
-        "Arteon": ["Fastback", "Shooting Brake (Kombi)"], "ID.3": ["Hatchback"], 
-        "ID.4": ["SUV"], "ID.Buzz": ["Van"]
-    },
-    "Toyota": {
-        "Corolla": ["Hatchback", "Sedan", "Touring Sports (Kombi)"], "Yaris": ["Hatchback"], 
-        "RAV4": ["SUV"], "Camry": ["Sedan"], "C-HR": ["Crossover"]
-    },
-    "Skoda": {
-        "Octavia": ["Liftback", "Combi"], "Superb": ["Liftback", "Combi"], 
-        "Kodiaq": ["SUV"], "Enyaq": ["SUV", "Coupe"]
-    },
-    "Ford": {
-        "Focus": ["Hatchback", "Kombi"], "Mondeo": ["Sedan", "Kombi", "Liftback"], 
-        "Mustang": ["Fastback", "Convertible", "Mach-E (SUV)"]
-    },
-    "Porsche": {
-        "911 (992)": ["Coupe", "Cabriolet", "Targa"], "Taycan": ["Sedan", "Cross Turismo", "Sport Turismo"], 
-        "Panamera": ["Sedan", "Sport Turismo"], "Cayenne": ["SUV", "Coupe"]
-    }
+    "Audi": {"A3": ["Hatchback", "Sedan"], "A4": ["Sedan", "Kombi"], "A6": ["Sedan", "Kombi"], "Q3": ["SUV"], "Q5": ["SUV"], "Q8": ["SUV"], "e-tron GT": ["Sedan"], "RS6": ["Kombi"]},
+    "BMW": {"Seria 3": ["Sedan", "Kombi"], "Seria 4": ["Coupe", "Gran Coupe"], "Seria 5": ["Sedan", "Kombi"], "X3": ["SUV"], "X5": ["SUV"], "M3": ["Sedan", "Kombi"], "M4": ["Coupe"]},
+    "BYD": {"Seal": ["Sedan"], "Atto 3": ["SUV"], "Han": ["Sedan"], "Dolphin": ["Hatchback"]},
+    "Ford": {"Focus": ["Hatchback", "Kombi"], "Mustang": ["Coupe", "Cabriolet"], "Mustang Mach-E": ["SUV"], "Puma": ["Crossover"]},
+    "Hyundai": {"Tucson": ["SUV"], "Ioniq 5": ["Hatchback/Crossover"], "Ioniq 6": ["Sedan"], "i30": ["Hatchback", "Kombi"], "Kona": ["Crossover"]},
+    "Kia": {"EV6": ["Crossover"], "Sportage": ["SUV"], "Ceed": ["Hatchback", "Kombi"], "Stinger": ["Liftback"], "Sorento": ["SUV"]},
+    "Lexus": {"NX": ["SUV"], "RX": ["SUV"], "ES": ["Sedan"], "LC": ["Coupe"]},
+    "Mercedes-Benz": {"Klasa C": ["Sedan", "Kombi"], "Klasa E": ["Sedan", "Kombi"], "GLC": ["SUV", "Coupe"], "GLE": ["SUV", "Coupe"], "Klasa G": ["SUV"], "AMG GT": ["Coupe"]},
+    "MG": {"MG4": ["Hatchback"], "HS": ["SUV"], "ZS": ["SUV"], "Cyberster": ["Roadster"]},
+    "NIO": {"ET7": ["Sedan"], "ET5": ["Sedan"], "EL7": ["SUV"]},
+    "Porsche": {"911 (992)": ["Coupe", "Cabriolet"], "Taycan": ["Sedan", "Cross Turismo"], "Macan": ["SUV"], "Panamera": ["Sedan"], "Cayenne": ["SUV", "Coupe"]},
+    "Renault": {"Scenic E-Tech": ["Crossover"], "Megane E-Tech": ["Hatchback"], "Austral": ["SUV"], "Clio": ["Hatchback"], "Captur": ["Crossover"]},
+    "Skoda": {"Octavia": ["Liftback", "Kombi"], "Superb": ["Liftback", "Kombi"], "Kodiaq": ["SUV"], "Enyaq": ["SUV", "Coupe"]},
+    "Tesla": {"Model 3": ["Sedan"], "Model Y": ["SUV"], "Model S": ["Sedan"], "Model X": ["SUV"]},
+    "Toyota": {"Corolla": ["Hatchback", "Sedan", "Kombi"], "Yaris": ["Hatchback"], "RAV4": ["SUV"], "C-HR": ["Crossover"], "Camry": ["Sedan"]},
+    "Volkswagen": {"Golf": ["Hatchback", "Kombi"], "Passat": ["Kombi", "Sedan"], "Arteon": ["Liftback", "Kombi"], "ID.4": ["SUV"], "Tiguan": ["SUV"]},
+    "Volvo": {"XC40": ["SUV"], "XC60": ["SUV"], "XC90": ["SUV"], "V60": ["Kombi"]}
 }
 
-# --- PEŁNA BAZA FOLII ---
+# --- PEŁNA BAZA FOLII (W TYM XPEL PPF) ---
 FOIL_GROUPS = {
+    "XPEL (Folie Ochronne PPF)": {
+        "Bezbarwne (Twój obecny kolor)": [
+            "XPEL Ultimate Plus (Wysoki Połysk)", 
+            "XPEL Stealth (Mat/Satyna)"
+        ],
+        "XPEL Color (Zmiana Koloru PPF)": [
+            "Black (Połysk)", "White (Połysk)", "Red (Połysk)", 
+            "Nardo Grey (Połysk)", "Miami Blue (Połysk)"
+        ]
+    },
     "3M 2080 Series": {
-        "Matte (Matowe)": ["Matte Black (M12)", "Matte Deep Black (M22)", "Matte Dark Grey (M261)", "Matte White (M10)", "Matte Military Green (M26)", "Matte Pine Green (M206)", "Matte Blue Metallic (M227)", "Matte Slate Blue (M217)"],
-        "Satin (Satynowe)": ["Satin Black (S12)", "Satin Gold Dust Black (SP242)", "Satin Dark Grey (S162)", "Satin White (S10)", "Satin Frozen Vanilla (S126)", "Satin Key West (S378)", "Satin Perfect Blue (S347)", "Satin Vampire Red (S208)"],
-        "Gloss (Połysk)": ["Gloss Black (G12)", "Gloss White (G10)", "Gloss Hot Rod Red (G13)", "Gloss Sky Blue (G77)", "Gloss Dragon Red (G212)", "Gloss Intense Blue (G47)", "Gloss Bright Yellow (G15)"],
-        "Color Flip (Kameleon)": ["Gloss Flip Electric Wave (GP287)", "Satin Flip Volcanic Flare (SP236)", "Gloss Flip Deep Space (GP278)", "Satin Flip Caribbean Shimmer (SP276)"]
+        "Matte (Matowe)": ["Matte Black (M12)", "Matte Deep Black (M22)", "Matte Dark Grey (M261)", "Matte White (M10)", "Matte Military Green (M26)"],
+        "Satin (Satynowe)": ["Satin Black (S12)", "Satin Dark Grey (S162)", "Satin White (S10)", "Satin Vampire Red (S208)"],
+        "Gloss (Połysk)": ["Gloss Black (G12)", "Gloss White (G10)", "Gloss Hot Rod Red (G13)", "Gloss Sky Blue (G77)"],
+        "Color Flip (Kameleon)": ["Gloss Flip Electric Wave (GP287)", "Satin Flip Volcanic Flare (SP236)"]
     },
     "Avery Dennison SW900": {
-        "Satin": ["Satin Black", "Satin White", "Satin Pearl White", "Satin Carmine Red", "Satin Khaki Green", "Satin Hope Green", "Satin Dark Basalt", "Satin Metallic Grey"],
-        "Gloss": ["Gloss Black", "Gloss White", "Gloss Obsidian Black", "Gloss Rock Grey", "Gloss Grey Metallic", "Gloss Carmine Red", "Gloss Ambulance Yellow", "Gloss Sea Breeze Blue"],
-        "ColorFlow (Kameleon)": ["Rising Sun (Red/Gold)", "Urban Jungle (Green/Purple)", "Roaring Thunder (Blue/Red)", "Fresh Spring (Gold/Silver)"],
-        "Matte": ["Matte Black", "Matte White", "Matte Charcoal Metallic", "Matte Night Blue Metallic", "Matte Olive Green"]
+        "Satin": ["Satin Black", "Satin Pearl White", "Satin Carmine Red", "Satin Khaki Green", "Satin Metallic Grey"],
+        "Gloss": ["Gloss Black", "Gloss White", "Gloss Obsidian Black", "Gloss Rock Grey", "Gloss Carmine Red"],
+        "Matte": ["Matte Black", "Matte White", "Matte Charcoal Metallic", "Matte Olive Green"]
     },
     "Oracal 970RA": {
-        "Shift Effect": ["Gloss Avocado", "Gloss Amethyst", "Gloss Cranberry", "Gloss Aquamarine"],
-        "Special": ["Gloss Telegrey", "Gloss Nardo Grey Style", "Matte Nato Olive", "Gloss Police Blue", "Gloss Taxi Beige"],
-        "Metallic": ["Gloss Graphite Metallic", "Matte Anthracite Metallic", "Gloss Pyrite", "Gloss Silver Grey"]
+        "Special": ["Gloss Telegrey", "Gloss Nardo Grey Style", "Matte Nato Olive"],
+        "Metallic": ["Gloss Graphite Metallic", "Matte Anthracite Metallic", "Gloss Silver Grey"]
     }
 }
 
