@@ -27,20 +27,15 @@ CAR_DATABASE = {
     "Tesla": {"Model 3": ["Sedan"], "Model Y": ["SUV"], "Model S": ["Sedan"], "Model X": ["SUV"]},
     "Toyota": {"Corolla": ["Hatchback", "Sedan", "Kombi"], "Yaris": ["Hatchback"], "RAV4": ["SUV"], "C-HR": ["Crossover"], "Camry": ["Sedan"]},
     "Volkswagen": {"Golf": ["Hatchback", "Kombi"], "Passat": ["Kombi", "Sedan"], "Arteon": ["Liftback", "Kombi"], "ID.4": ["SUV"], "Tiguan": ["SUV"]},
-    "Volvo": {"XC40": ["SUV"], "XC60": ["SUV"], "XC90": ["SUV"], "V60": ["Kombi"]}
+    "Volvo": {"XC40": ["SUV"], "XC60": ["SUV"], "XC90": ["SUV"], "V60": ["Kombi"]},
+    "Inna marka...": {"Wpisz ręcznie": ["Inne"]}
 }
 
-# --- PEŁNA BAZA FOLII (W TYM XPEL PPF) ---
+# --- PEŁNA BAZA FOLII ---
 FOIL_GROUPS = {
     "XPEL (Folie Ochronne PPF)": {
-        "Bezbarwne (Twój obecny kolor)": [
-            "XPEL Ultimate Plus (Wysoki Połysk)", 
-            "XPEL Stealth (Mat/Satyna)"
-        ],
-        "XPEL Color (Zmiana Koloru PPF)": [
-            "Black (Połysk)", "White (Połysk)", "Red (Połysk)", 
-            "Nardo Grey (Połysk)", "Miami Blue (Połysk)"
-        ]
+        "Bezbarwne (Twój obecny kolor)": ["XPEL Ultimate Plus (Wysoki Połysk)", "XPEL Stealth (Mat/Satyna)"],
+        "XPEL Color (Zmiana Koloru PPF)": ["Black (Połysk)", "White (Połysk)", "Red (Połysk)", "Nardo Grey (Połysk)", "Miami Blue (Połysk)"]
     },
     "3M 2080 Series": {
         "Matte (Matowe)": ["Matte Black (M12)", "Matte Deep Black (M22)", "Matte Dark Grey (M261)", "Matte White (M10)", "Matte Military Green (M26)"],
@@ -75,8 +70,7 @@ def generate_ai_image(prompt):
     try:
         response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
-            img_b64 = response.json()['predictions'][0]['bytesBase64Encoded']
-            return base64.b64decode(img_b64)
+            return base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
     except Exception as e:
         st.error(f"Błąd AI: {e}")
     return None
@@ -91,31 +85,35 @@ def download_file(service, file_id):
 def pptx_to_pdf(input_path):
     try:
         subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
-        pdf_name = os.path.basename(input_path).replace('.pptx', '.pdf')
-        return pdf_name if os.path.exists(pdf_name) else None
+        return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
 
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
 
-# Autoryzacja i pobranie bazy plików na start
-creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], 
-        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
-q = f"'{FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false"
-results = service.files().list(q=q, fields="files(id, name)").execute()
+results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
-# --- PANEL BOCZNY (STUDIO AI + DODATKI) ---
+# --- PANEL BOCZNY ---
 with st.sidebar:
     st.title("🚗 Studio AI")
-    brand = st.selectbox("Marka", sorted(list(CAR_DATABASE.keys())))
-    model = st.selectbox("Model", sorted(list(CAR_DATABASE[brand].keys())))
-    body = st.selectbox("Nadwozie", CAR_DATABASE[brand][model])
+    brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
+    
+    # Obsługa wpisywania ręcznego
+    if brand == "Inna marka...":
+        custom_brand = st.text_input("Wpisz markę")
+        custom_model = st.text_input("Wpisz model")
+        final_brand, final_model, body = custom_brand, custom_model, ""
+    else:
+        final_brand = brand
+        final_model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()))
+        body = st.selectbox("Nadwozie", CAR_DATABASE[brand][final_model])
+        
     year = st.selectbox("Rocznik", [str(y) for y in range(2026, 1999, -1)])
     
     st.markdown("---")
@@ -124,8 +122,19 @@ with st.sidebar:
     f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
     f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
 
+    # LOGIKA DLA FOLII BEZBARWNYCH (XPEL)
+    paint_color = ""
+    if "Bezbarwne" in f_cat:
+        paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
+
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
-        prompt = f"Professional automotive studio photography of a {year} {brand} {model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. Floor: polished black epoxy with clear reflections."
+        # Budowanie promptu z uwzględnieniem koloru lakieru
+        if "Bezbarwne" in f_cat:
+            finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
+        else:
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
+            
         with st.spinner("AI renderuje Twoje auto..."):
             img_data = generate_ai_image(prompt)
             if img_data:
@@ -135,10 +144,7 @@ with st.sidebar:
     st.markdown("---")
     st.header("📦 Dodatki do oferty")
     dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
-    wybrane_dodatki = []
-    for d in sorted(dodatki_dostepne, key=lambda x: x['name']):
-        if st.checkbox(d['name'], value=False):
-            wybrane_dodatki.append(d)
+    wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name']) if st.checkbox(d['name'], value=False)]
 
 # --- GŁÓWNY PANEL ---
 st.title("🛡️ Generator Ofert ITS WRAP")
@@ -148,7 +154,6 @@ with col1:
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
-    # Cennik
     sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
     df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
     pakiet = st.selectbox("Pakiet z cennika", df['Usługa'].tolist())
@@ -156,7 +161,7 @@ with col1:
 
 with col2:
     if 'ai_img' in st.session_state:
-        st.image(st.session_state['ai_img'], caption=f"Wizualizacja: {brand} {model} w folii {f_color}", use_container_width=True)
+        st.image(st.session_state['ai_img'], use_container_width=True)
     else:
         st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
@@ -170,17 +175,34 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             row = df[df['Usługa'] == pakiet].iloc[0]
             cena_num = float(re.sub(r'[^\d,]', '', row['Kwota sprzedaży']).replace(',', '.'))
 
+            # Jeśli wybrano PPF bezbarwny, dodajemy info o kolorze lakieru do PDF
+            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
+
             replacements = {
-                "{{KLIENT}}": klient, "{{MODEL_AUTA}}": f"{brand} {model}",
-                "{{RODZAJ_FOLII}}": f_color, "{{USLUGA_NAZWA}}": pakiet,
+                "{{KLIENT}}": klient, "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
+                "{{RODZAJ_FOLII}}": final_foil_text, "{{USLUGA_NAZWA}}": pakiet,
                 "{{NR_OFERTY}}": nr_o,
                 "{{CENA_KATALOG}}": f"{cena_num:,.2f} zł".replace(',', ' ').replace('.', ','),
                 "{{CENA_KONCOWA}}": f"{(cena_num - rabat):,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
-            # Składanie klocków (1 -> 2 -> wybrane_dodatki -> 3 -> 6)
+            # 1. OKŁADKA
             okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1')), None)
-            produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+            
+            # 2. INTELIGENTNY WYBÓR STRONY PRODUKTOWEJ
+            produkt = None
+            if "Ultimate" in f_color:
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
+            elif "Stealth" in f_color:
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'stealth' in f['name'].lower()), None)
+            elif "Color" in f_cat:
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
+            
+            # Jeśli nie znalazł konkretnego XPEL, bierze domyślny plik 2_
+            if not produkt:
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+
+            # 3 i 6. ZAKRES I KONIEC
             zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
@@ -190,16 +212,14 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
                 for slide in prs.slides:
-                    # Podmiana zdjęcia AI na okładce
                     if f_info['name'].startswith('1'):
                         for shape in list(slide.shapes):
                             if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
                                 pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
                                 slide.shapes._spTree.remove(pic._element)
-                                slide.shapes._spTree.insert(2, pic._element) # Wysyłamy zdjęcie na spód
+                                slide.shapes._spTree.insert(2, pic._element)
                                 shape._element.getparent().remove(shape._element)
 
-                    # Podmiana tekstów i wymuszenie czcionki
                     for shape in slide.shapes:
                         if shape.has_text_frame:
                             for p in shape.text_frame.paragraphs:
@@ -215,5 +235,4 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
-            st.balloons()
-            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{brand}_{model}.pdf")
+            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
