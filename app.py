@@ -218,8 +218,19 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not produkt:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
 
-            # 3 i 6. ZAKRES I KONIEC
-            zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
+            # 3. ZAKRES PRAC (Zależnie od wpisanego rabatu!)
+            if rabat > 0:
+                # Jeśli jest rabat -> zaciągnij plik z przekreśloną starą ceną (ignorujemy 'bezrabatu')
+                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
+            else:
+                # Jeśli rabat to 0 -> zaciągnij plik czysty (bez rabatu)
+                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
+            
+            # Fallback w razie awarii na Google Drive
+            if not zakres:
+                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
+
+            # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
             seq = [okladka, produkt] + wybrane_dodatki + [zakres, koniec]
