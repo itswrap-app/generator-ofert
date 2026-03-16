@@ -106,7 +106,7 @@ df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
-    st.title("🚗 Wybierz auto")
+    st.title("🚗 Studio AI")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
     
     if brand == "Inna marka...":
@@ -226,14 +226,14 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 # Jeśli rabat to 0 -> zaciągnij plik czysty (bez rabatu)
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
             
-            # Fallback w razie awarii na Google Drive
             if not zakres:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
 
             # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-            seq = [okladka, produkt] + wybrane_dodatki + [zakres, koniec]
+            # NOWA KOLEJNOŚĆ: Okładka -> Produkt -> Zakres (Cena) -> DODATKI -> Koniec
+            seq = [okladka, produkt, zakres] + wybrane_dodatki + [koniec]
             seq = [f for f in seq if f]
 
             for f_info in seq:
@@ -262,4 +262,5 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+            st.balloons()
             st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
