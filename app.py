@@ -8,7 +8,7 @@ from googleapiclient.http import MediaIoBaseDownload
 import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
-from PIL import Image  # NOWOŚĆ: Biblioteka do docięcia obrazu
+from PIL import Image
 
 # --- PEŁNA BAZA SAMOCHODÓW ---
 CAR_DATABASE = {
@@ -66,30 +66,31 @@ def install_fonts():
 
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
-    # Używamy najnowszego stabilnego modelu
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
     
-    # Prosimy AI o obraz panoramiczny (najlepszy dla aut)
+    # Eksperymentalny endpoint (v1alpha), mniejsze restrykcje
+    url = f"https://generativelanguage.googleapis.com/v1alpha/models/imagen-3.0-generate-001:predict?key={api_key}"
+    
+    # Format 4:3 (który potem dotniemy)
     payload = {
         "instances": [{"prompt": prompt}],
         "parameters": {
             "sampleCount": 1,
             "outputFormat": "PNG",
-            "aspectRatio": "4:3" 
+            "aspectRatio": "4:3"
         }
     }
     
     try:
         response = requests.post(url, json=payload, timeout=60)
+        
         if response.status_code == 200:
             img_data = base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
             
-            # --- MAGIA CROP: Idealne kadrowanie do proporcji 210x187 ---
+            # --- CYFROWA GILOTYNA (Kadrowanie do proporcji ramki 210x187) ---
             img = Image.open(io.BytesIO(img_data))
             w, h = img.size
             target_ratio = 21.0 / 18.7 # Ok. 1.123
             
-            # 4:3 ma ratio 1.33. Obraz jest szerszy niż ramka. Obcinamy symetrycznie lewy i prawy bok.
             new_w = int(h * target_ratio)
             left = (w - new_w) / 2
             right = left + new_w
@@ -98,12 +99,18 @@ def generate_ai_image(prompt):
             out_bytes = io.BytesIO()
             img_cropped.save(out_bytes, format='PNG')
             return out_bytes.getvalue()
-            
         else:
-            st.error(f"API Google odrzuciło zapytanie: {response.status_code} - {response.text}")
+            st.warning(f"Google API odrzuciło zapytanie: {response.text}")
+            
     except Exception as e:
-        st.error(f"Błąd sieci/AI: {e}")
-    return None
+        st.error(f"Błąd sieci: {e}")
+        
+    # --- AWARYJNE ZDJĘCIE ZASTĘPCZE ---
+    st.info("Wygenerowano zdjęcie zastępcze, abyś mógł przetestować układ PDF-a.")
+    img_fallback = Image.new('RGB', (2100, 1870), color=(30, 30, 35))
+    out_fallback = io.BytesIO()
+    img_fallback.save(out_fallback, format='PNG')
+    return out_fallback.getvalue()
 
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
@@ -169,7 +176,6 @@ with st.sidebar:
             img_data = generate_ai_image(prompt)
             if img_data:
                 st.session_state['ai_img'] = img_data
-                st.success("Render gotowy i precyzyjnie docięty!")
                 
     st.markdown("---")
     st.header("📦 Dodatki do oferty")
@@ -250,6 +256,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
 
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
+            # KOLEJNOŚĆ: Okładka -> Produkt -> Zakres (Cena) -> DODATKI -> Koniec
             seq = [okladka, produkt, zakres] + wybrane_dodatki + [koniec]
             seq = [f for f in seq if f]
 
@@ -279,4 +286,5 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+            st.balloons()
             st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
