@@ -8,6 +8,7 @@ from googleapiclient.http import MediaIoBaseDownload
 import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
+from PIL import Image  # NOWOŚĆ: Biblioteka do docięcia obrazu
 
 # --- PEŁNA BAZA SAMOCHODÓW ---
 CAR_DATABASE = {
@@ -65,27 +66,43 @@ def install_fonts():
 
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
+    # Używamy najnowszego stabilnego modelu
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
     
-    # --- NOWA LOGIKA: Precyzyjne proporcje pikselowe ---
-    # Wymuszamy obraz o wysokiej rozdzielczości, który ma taki sam stosunek szerokości do wysokości (1,123), jak ramka 21cm x 18,7cm.
-    # Używamy formatu PNG dla lepszej jakości (brak kompresji kolorów PPF).
-    
+    # Prosimy AI o obraz panoramiczny (najlepszy dla aut)
     payload = {
         "instances": [{"prompt": prompt}],
         "parameters": {
             "sampleCount": 1,
             "outputFormat": "PNG",
-            "aspectRatio": "1123:1000" # Wymuszamy precyzyjne proporcje pikselowe (210 / 18,7 * 100)
+            "aspectRatio": "4:3" 
         }
     }
     
     try:
         response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
-            return base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
+            img_data = base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
+            
+            # --- MAGIA CROP: Idealne kadrowanie do proporcji 210x187 ---
+            img = Image.open(io.BytesIO(img_data))
+            w, h = img.size
+            target_ratio = 21.0 / 18.7 # Ok. 1.123
+            
+            # 4:3 ma ratio 1.33. Obraz jest szerszy niż ramka. Obcinamy symetrycznie lewy i prawy bok.
+            new_w = int(h * target_ratio)
+            left = (w - new_w) / 2
+            right = left + new_w
+            img_cropped = img.crop((left, 0, right, h))
+            
+            out_bytes = io.BytesIO()
+            img_cropped.save(out_bytes, format='PNG')
+            return out_bytes.getvalue()
+            
+        else:
+            st.error(f"API Google odrzuciło zapytanie: {response.status_code} - {response.text}")
     except Exception as e:
-        st.error(f"Błąd AI: {e}")
+        st.error(f"Błąd sieci/AI: {e}")
     return None
 
 def download_file(service, file_id):
@@ -109,11 +126,9 @@ creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"],
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-# Pobranie plików z Google Drive
 results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
-# Pobranie Cennika
 sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
 df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
 
@@ -146,15 +161,15 @@ with st.sidebar:
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. No people, no other cars. The entire car is in the frame. Pre-configured for a precise aspect ratio."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. The entire car is in the frame."
         else:
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. No people, no other cars. The entire car is in the frame. Pre-configured for a precise aspect ratio."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. The entire car is in the frame."
             
-        with st.spinner("AI renderuje Twoje auto w formacie 210x187mm..."):
+        with st.spinner("AI renderuje Twoje auto i dopasowuje do proporcji okładki..."):
             img_data = generate_ai_image(prompt)
             if img_data:
                 st.session_state['ai_img'] = img_data
-                st.success("Render gotowy i w idealnych proporcjach!")
+                st.success("Render gotowy i precyzyjnie docięty!")
                 
     st.markdown("---")
     st.header("📦 Dodatki do oferty")
@@ -188,8 +203,7 @@ with col1:
 
 with col2:
     if 'ai_img' in st.session_state:
-        # Podgląd w aplikacji również w poprawnych proporcjach
-        st.image(st.session_state['ai_img'], caption=f"Precyzyjny render AI dla ramki {final_brand} {final_model}", use_container_width=True)
+        st.image(st.session_state['ai_img'], use_container_width=True)
     else:
         st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
@@ -213,10 +227,8 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
-            # 1. OKŁADKA
             okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1')), None)
             
-            # 2. STRONA PRODUKTOWA (Rozpoznawanie XPEL)
             produkt = None
             if "Ultimate" in f_color:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
@@ -228,7 +240,6 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not produkt:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
 
-            # 3. ZAKRES PRAC (Zależnie od wpisanego rabatu!)
             if rabat > 0:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
             else:
@@ -237,10 +248,8 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not zakres:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
 
-            # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-            # KOLEJNOŚĆ: Okładka -> Produkt -> Zakres (Cena) -> DODATKI -> Koniec
             seq = [okladka, produkt, zakres] + wybrane_dodatki + [koniec]
             seq = [f for f in seq if f]
 
