@@ -66,7 +66,20 @@ def install_fonts():
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
-    payload = {"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}}
+    
+    # --- NOWA LOGIKA: Precyzyjne proporcje pikselowe ---
+    # Wymuszamy obraz o wysokiej rozdzielczości, który ma taki sam stosunek szerokości do wysokości (1,123), jak ramka 21cm x 18,7cm.
+    # Używamy formatu PNG dla lepszej jakości (brak kompresji kolorów PPF).
+    
+    payload = {
+        "instances": [{"prompt": prompt}],
+        "parameters": {
+            "sampleCount": 1,
+            "outputFormat": "PNG",
+            "aspectRatio": "1123:1000" # Wymuszamy precyzyjne proporcje pikselowe (210 / 18,7 * 100)
+        }
+    }
+    
     try:
         response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
@@ -133,15 +146,15 @@ with st.sidebar:
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. No people, no other cars. The entire car is in the frame. Pre-configured for a precise aspect ratio."
         else:
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. No people, no other cars. The entire car is in the frame. Pre-configured for a precise aspect ratio."
             
-        with st.spinner("AI renderuje Twoje auto..."):
+        with st.spinner("AI renderuje Twoje auto w formacie 210x187mm..."):
             img_data = generate_ai_image(prompt)
             if img_data:
                 st.session_state['ai_img'] = img_data
-                st.success("Render gotowy!")
+                st.success("Render gotowy i w idealnych proporcjach!")
                 
     st.markdown("---")
     st.header("📦 Dodatki do oferty")
@@ -156,10 +169,8 @@ with col1:
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
-    # Wybór pakietu
     pakiet = st.selectbox("Pakiet z cennika", df['Usługa'].tolist())
     
-    # Wyszukanie ceny domyślnej w ułamku sekundy
     wiersz = df[df['Usługa'] == pakiet].iloc[0]
     try:
         cena_domyslna = float(re.sub(r'[^\d,]', '', wiersz['Kwota sprzedaży']).replace(',', '.'))
@@ -169,7 +180,6 @@ with col1:
     st.markdown("---")
     st.write("💰 **Kalkulacja cenowa**")
     
-    # Nowe kontrolki cenowe (z możliwością ręcznej edycji!)
     cena_manual = st.number_input("Cena bazowa (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
     rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
     cena_koncowa = cena_manual - rabat
@@ -178,7 +188,8 @@ with col1:
 
 with col2:
     if 'ai_img' in st.session_state:
-        st.image(st.session_state['ai_img'], use_container_width=True)
+        # Podgląd w aplikacji również w poprawnych proporcjach
+        st.image(st.session_state['ai_img'], caption=f"Precyzyjny render AI dla ramki {final_brand} {final_model}", use_container_width=True)
     else:
         st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
@@ -192,7 +203,6 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
 
             final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
 
-            # Podmieniamy teraz na kwoty z edytowalnych okienek, a nie prosto z bazy
             replacements = {
                 "{{KLIENT}}": klient, 
                 "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
@@ -220,10 +230,8 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
 
             # 3. ZAKRES PRAC (Zależnie od wpisanego rabatu!)
             if rabat > 0:
-                # Jeśli jest rabat -> zaciągnij plik z przekreśloną starą ceną (ignorujemy 'bezrabatu')
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
             else:
-                # Jeśli rabat to 0 -> zaciągnij plik czysty (bez rabatu)
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
             
             if not zakres:
@@ -232,7 +240,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-            # NOWA KOLEJNOŚĆ: Okładka -> Produkt -> Zakres (Cena) -> DODATKI -> Koniec
+            # KOLEJNOŚĆ: Okładka -> Produkt -> Zakres (Cena) -> DODATKI -> Koniec
             seq = [okladka, produkt, zakres] + wybrane_dodatki + [koniec]
             seq = [f for f in seq if f]
 
@@ -262,5 +270,4 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
-            st.balloons()
             st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
