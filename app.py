@@ -66,51 +66,34 @@ def install_fonts():
 
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
-    
-    # Eksperymentalny endpoint (v1alpha), mniejsze restrykcje
-    url = f"https://generativelanguage.googleapis.com/v1alpha/models/imagen-3.0-generate-001:predict?key={api_key}"
-    
-    # Format 4:3 (który potem dotniemy)
-    payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {
-            "sampleCount": 1,
-            "outputFormat": "PNG",
-            "aspectRatio": "4:3"
-        }
-    }
-    
+    # Twój link API, który działał
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
+    payload = {"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}}
     try:
         response = requests.post(url, json=payload, timeout=60)
-        
         if response.status_code == 200:
             img_data = base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
             
-            # --- CYFROWA GILOTYNA (Kadrowanie do proporcji ramki 210x187) ---
+            # --- DODANE: Inteligentne docięcie do proporcji 21 x 18.7 ---
             img = Image.open(io.BytesIO(img_data))
             w, h = img.size
-            target_ratio = 21.0 / 18.7 # Ok. 1.123
+            target_ratio = 21.0 / 18.7
             
-            new_w = int(h * target_ratio)
-            left = (w - new_w) / 2
-            right = left + new_w
-            img_cropped = img.crop((left, 0, right, h))
-            
+            if w / h > target_ratio: # Obraz za szeroki
+                new_w = int(h * target_ratio)
+                left = (w - new_w) / 2
+                img_cropped = img.crop((left, 0, left + new_w, h))
+            else: # Obraz za wysoki
+                new_h = int(w / target_ratio)
+                top = (h - new_h) / 2
+                img_cropped = img.crop((0, top, w, top + new_h))
+                
             out_bytes = io.BytesIO()
             img_cropped.save(out_bytes, format='PNG')
             return out_bytes.getvalue()
-        else:
-            st.warning(f"Google API odrzuciło zapytanie: {response.text}")
-            
     except Exception as e:
-        st.error(f"Błąd sieci: {e}")
-        
-    # --- AWARYJNE ZDJĘCIE ZASTĘPCZE ---
-    st.info("Wygenerowano zdjęcie zastępcze, abyś mógł przetestować układ PDF-a.")
-    img_fallback = Image.new('RGB', (2100, 1870), color=(30, 30, 35))
-    out_fallback = io.BytesIO()
-    img_fallback.save(out_fallback, format='PNG')
-    return out_fallback.getvalue()
+        st.error(f"Błąd AI: {e}")
+    return None
 
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
@@ -133,9 +116,11 @@ creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"],
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
+# Pobranie plików z Google Drive
 results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
+# Pobranie Cennika
 sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
 df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
 
@@ -168,14 +153,15 @@ with st.sidebar:
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. The entire car is in the frame."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
         else:
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus. The entire car is in the frame."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
             
-        with st.spinner("AI renderuje Twoje auto i dopasowuje do proporcji okładki..."):
+        with st.spinner("AI renderuje Twoje auto..."):
             img_data = generate_ai_image(prompt)
             if img_data:
                 st.session_state['ai_img'] = img_data
+                st.success("Render gotowy i precyzyjnie docięty do ramki!")
                 
     st.markdown("---")
     st.header("📦 Dodatki do oferty")
@@ -190,8 +176,10 @@ with col1:
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
+    # Wybór pakietu
     pakiet = st.selectbox("Pakiet z cennika", df['Usługa'].tolist())
     
+    # Wyszukanie ceny domyślnej w ułamku sekundy
     wiersz = df[df['Usługa'] == pakiet].iloc[0]
     try:
         cena_domyslna = float(re.sub(r'[^\d,]', '', wiersz['Kwota sprzedaży']).replace(',', '.'))
@@ -201,6 +189,7 @@ with col1:
     st.markdown("---")
     st.write("💰 **Kalkulacja cenowa**")
     
+    # Nowe kontrolki cenowe (z możliwością ręcznej edycji!)
     cena_manual = st.number_input("Cena bazowa (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
     rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
     cena_koncowa = cena_manual - rabat
@@ -233,8 +222,10 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ',')
             }
 
+            # 1. OKŁADKA
             okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1')), None)
             
+            # 2. STRONA PRODUKTOWA
             produkt = None
             if "Ultimate" in f_color:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
@@ -246,6 +237,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not produkt:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
 
+            # 3. ZAKRES PRAC
             if rabat > 0:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
             else:
@@ -254,9 +246,10 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not zakres:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
 
+            # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-            # KOLEJNOŚĆ: Okładka -> Produkt -> Zakres (Cena) -> DODATKI -> Koniec
+            # --- DODANE: Poprawna kolejność składania ---
             seq = [okladka, produkt, zakres] + wybrane_dodatki + [koniec]
             seq = [f for f in seq if f]
 
@@ -286,5 +279,4 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
-            st.balloons()
             st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
