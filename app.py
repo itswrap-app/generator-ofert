@@ -102,7 +102,8 @@ def generate_ai_image(prompt):
 # 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI (Z INTELIGENTNYM FALLBACKIEM)
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # ZMIANA: Używamy stabilnego i wszędzie wspieranego modelu gemini-pro
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
     
     imie = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
@@ -116,7 +117,7 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     - Folia: {czysta_folia}
     
     BEZWZGLĘDNE ZASADY:
-    1. ZWROT: Odmień imię w wołaczu! (np. Tomasz -> Panie Tomaszu, Adam -> Panie Adamie, Piotr -> Panie Piotrze).
+    1. ZWROT: Odmień imię w wołaczu! (np. Tomasz -> Panie Tomaszu, Adam -> Panie Adamie, Piotr -> Panie Piotrze, Dominik -> Panie Dominiku).
     2. AUTO: Użyj "dla Twojego {brand}". (np. "dla Twojego Audi", "dla Twojego Forda"). ZABRONIONE jest pisanie "dla pojazdu marki".
     3. STYL: Pisz w 1. osobie liczby pojedynczej ("dobrałem"). 
     4. PODPIS: Zakończ tekst DOKŁADNIE tak:
@@ -135,20 +136,23 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
-            # Wyrzuca błąd na ekran, żebyśmy widzieli, co blokuje Google!
             st.warning(f"Błąd AI Text: {response.text}")
     except Exception as e:
         pass
     
-    # --- PROGRAMISTYCZNY, INTELIGENTNY FALLBACK (Działa zawsze, nawet bez internetu!) ---
+    # --- PROGRAMISTYCZNY, INTELIGENTNY FALLBACK ---
     wolacz = "Szanowny Kliencie"
     if imie:
         imie_lower = imie.lower()
         if imie_lower.endswith('a'):
             wolacz = f"Pani {imie}"
+        elif imie_lower.endswith(('ik', 'yk')): # Dodana reguła dla Dominik, Patryk, Eryk itp.
+            wolacz = f"Panie {imie}u"
+        elif imie_lower.endswith('id'): # Dawid
+            wolacz = f"Panie {imie}zie"
         elif imie_lower in ["tomasz", "łukasz", "mateusz", "janusz", "mariusz"]:
             wolacz = f"Panie {imie}u"
-        elif imie_lower in ["adam", "michal", "michał", "kamil", "marcin"]:
+        elif imie_lower in ["adam", "michal", "michał", "kamil", "marcin", "adrian", "krystian"]:
             wolacz = f"Panie {imie}ie"
         elif imie_lower in ["piotr", "kacper", "wiktor"]:
             wolacz = f"Panie {imie}ze"
@@ -157,7 +161,7 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
         elif imie_lower.endswith(('i', 'y')):
             wolacz = f"Panie {imie}"
         else:
-            wolacz = f"Panie {imie}" # Względnie bezpieczna baza
+            wolacz = f"Panie {imie}" # Baza
             
     # Odmiana marki (najpopularniejsze)
     marka = brand
@@ -166,21 +170,10 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     elif brand == "Kia": marka = "Kii"
     elif brand == "Tesla": marka = "Tesli"
     elif brand == "Porsche": marka = "Porsche"
+    elif brand == "Honda": marka = "Hondy"
+    elif brand == "Mazda": marka = "Mazdy"
 
     return f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
-def download_file(service, file_id):
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done: _, done = downloader.next_chunk()
-    fh.seek(0); return fh
-
-def pptx_to_pdf(input_path):
-    try:
-        subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
-        return os.path.basename(input_path).replace('.pptx', '.pdf')
-    except: return None
-
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
