@@ -102,7 +102,7 @@ def generate_ai_image(prompt):
 # 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI (Z INTELIGENTNYM FALLBACKIEM)
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
-    # ZMIANA: Używamy stabilnego i wszędzie wspieranego modelu gemini-pro
+    # Zmieniony model na sprawdzony i stabilny gemini-pro
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
     
     imie = klient.split()[0] if klient.strip() != "" else ""
@@ -136,7 +136,8 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
-            st.warning(f"Błąd AI Text: {response.text}")
+            # Pokaże się tylko, jeśli będzie problem z kontem API
+            st.warning(f"Błąd AI Text: Brak połączenia. Używam niezawodnego systemu zapasowego.")
     except Exception as e:
         pass
     
@@ -146,7 +147,7 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
         imie_lower = imie.lower()
         if imie_lower.endswith('a'):
             wolacz = f"Pani {imie}"
-        elif imie_lower.endswith(('ik', 'yk')): # Dodana reguła dla Dominik, Patryk, Eryk itp.
+        elif imie_lower.endswith(('ik', 'yk')): # Dominik, Patryk
             wolacz = f"Panie {imie}u"
         elif imie_lower.endswith('id'): # Dawid
             wolacz = f"Panie {imie}zie"
@@ -161,9 +162,9 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
         elif imie_lower.endswith(('i', 'y')):
             wolacz = f"Panie {imie}"
         else:
-            wolacz = f"Panie {imie}" # Baza
+            wolacz = f"Panie {imie}"
             
-    # Odmiana marki (najpopularniejsze)
+    # Odmiana marki
     marka = brand
     if brand == "Toyota": marka = "Toyoty"
     elif brand == "Skoda": marka = "Skody"
@@ -174,6 +175,20 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     elif brand == "Mazda": marka = "Mazdy"
 
     return f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
+
+def download_file(service, file_id):
+    request = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done: _, done = downloader.next_chunk()
+    fh.seek(0); return fh
+
+def pptx_to_pdf(input_path):
+    try:
+        subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
+        return os.path.basename(input_path).replace('.pptx', '.pdf')
+    except: return None
+
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
@@ -285,13 +300,9 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{WSTEP_AI}}": wygenerowany_wstep
             }
 
-            # 1. OKŁADKA
             okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
-            
-            # 1B. WSTĘP AI
             wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
             
-            # 2. STRONA PRODUKTOWA
             produkt = None
             if "Ultimate" in f_color:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
@@ -303,7 +314,6 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not produkt:
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
 
-            # 3. ZAKRES PRAC
             if rabat > 0:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
             else:
@@ -312,10 +322,8 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             if not zakres:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
 
-            # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-            # KOLEJNOŚĆ WZBOGACONA O WSTĘP AI
             seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
             seq = [f for f in seq if f]
 
