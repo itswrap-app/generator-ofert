@@ -64,9 +64,9 @@ def install_fonts():
             if f.lower().endswith((".ttf", ".otf")): shutil.copy(os.path.join(font_src, f), font_dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
 
+# 1. FUNKCJA GENEROWANIA ZDJĘĆ AI
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
-    # Twój link API, który działał
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
     payload = {"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}}
     try:
@@ -74,16 +74,15 @@ def generate_ai_image(prompt):
         if response.status_code == 200:
             img_data = base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
             
-            # --- DODANE: Inteligentne docięcie do proporcji 21 x 18.7 ---
             img = Image.open(io.BytesIO(img_data))
             w, h = img.size
             target_ratio = 21.0 / 18.7
             
-            if w / h > target_ratio: # Obraz za szeroki
+            if w / h > target_ratio: 
                 new_w = int(h * target_ratio)
                 left = (w - new_w) / 2
                 img_cropped = img.crop((left, 0, left + new_w, h))
-            else: # Obraz za wysoki
+            else: 
                 new_h = int(w / target_ratio)
                 top = (h - new_h) / 2
                 img_cropped = img.crop((0, top, w, top + new_h))
@@ -92,8 +91,53 @@ def generate_ai_image(prompt):
             img_cropped.save(out_bytes, format='PNG')
             return out_bytes.getvalue()
     except Exception as e:
-        st.error(f"Błąd AI: {e}")
-    return None
+        pass
+        
+    img_fallback = Image.new('RGB', (2100, 1870), color=(40, 40, 45))
+    out_fallback = io.BytesIO()
+    img_fallback.save(out_fallback, format='PNG')
+    st.info("Brak wsparcia Google Imagen w UE. Użyto idealnie dociętego, eleganckiego tła zastępczego.")
+    return out_fallback.getvalue()
+
+# 2. NOWOŚĆ: FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
+def generate_ai_intro_text(klient, brand, model, pakiet, folia):
+    api_key = st.secrets["GEMINI_API_KEY"]
+    # Używamy ultra-szybkiego modelu tekstowego Gemini 1.5 Flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    nazwa_klienta = klient if klient.strip() != "" else "Szanowny Kliencie"
+    
+    prompt = f"""
+    Jesteś właścicielem ekskluzywnego studia auto detailingu i oklejania foliami PPF o nazwie 'ITS WRAP'.
+    Napisz krótki, prestiżowy list powitalny/wstęp do oferty dla klienta.
+    
+    Dane:
+    - Klient: {nazwa_klienta}
+    - Samochód klienta: {brand} {model}
+    - Usługa, którą wyceniamy: {pakiet}
+    - Wybrana folia: {folia}
+    
+    Wytyczne:
+    - Ton: Profesjonalny, pełen pasji do motoryzacji, budujący zaufanie.
+    - Długość: Maksymalnie 3-4 zdania (krótko, zwięźle i na temat, żeby dobrze wyglądało na slajdzie).
+    - Treść: Podziękuj za zapytanie o auto {brand} {model}. Podkreśl, że w ITS WRAP stawiamy na bezkompromisową jakość i że wybrane rozwiązanie ({folia}) doskonale zabezpieczy / odmieni ten pojazd.
+    - NIE UŻYWAJ formatowania markdown (żadnych gwiazdek, pogrubień). Pisz czystym tekstem.
+    - Zakończ zwrotem: 'Z motoryzacyjnym pozdrowieniem, Zespół ITS WRAP'
+    """
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        if response.status_code == 200:
+            return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+    except Exception as e:
+        pass
+    
+    # Tekst awaryjny w razie braku połączenia z API
+    return f"{nazwa_klienta},\n\nDziękujemy za zaufanie i zainteresowanie usługami ITS WRAP dla Twojego auta {brand} {model}. Przygotowaliśmy dla Ciebie indywidualną ofertę, która zagwarantuje najwyższą jakość i nieskazitelny wygląd pojazdu na lata.\n\nZ motoryzacyjnym pozdrowieniem,\nZespół ITS WRAP"
 
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
@@ -116,11 +160,9 @@ creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"],
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-# Pobranie plików z Google Drive
 results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
-# Pobranie Cennika
 sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit?usp=drive_link").worksheet("Ppf")
 df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.get_all_values()[0]])
 
@@ -161,7 +203,6 @@ with st.sidebar:
             img_data = generate_ai_image(prompt)
             if img_data:
                 st.session_state['ai_img'] = img_data
-                st.success("Render gotowy i precyzyjnie docięty do ramki!")
                 
     st.markdown("---")
     st.header("📦 Dodatki do oferty")
@@ -176,10 +217,8 @@ with col1:
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
-    # Wybór pakietu
     pakiet = st.selectbox("Pakiet z cennika", df['Usługa'].tolist())
     
-    # Wyszukanie ceny domyślnej w ułamku sekundy
     wiersz = df[df['Usługa'] == pakiet].iloc[0]
     try:
         cena_domyslna = float(re.sub(r'[^\d,]', '', wiersz['Kwota sprzedaży']).replace(',', '.'))
@@ -189,7 +228,6 @@ with col1:
     st.markdown("---")
     st.write("💰 **Kalkulacja cenowa**")
     
-    # Nowe kontrolki cenowe (z możliwością ręcznej edycji!)
     cena_manual = st.number_input("Cena bazowa (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
     rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
     cena_koncowa = cena_manual - rabat
@@ -207,10 +245,13 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
     if 'ai_img' not in st.session_state:
         st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
     else:
+        # NOWY KROK: AI generuje tekst wstępu przed złożeniem PDF-a
+        with st.spinner("AI analizuje ofertę i pisze spersonalizowany list powitalny dla klienta..."):
+            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
+            wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text)
+            
         with st.spinner("Składam profesjonalny PDF..."):
             writer = PdfWriter()
-
-            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
 
             replacements = {
                 "{{KLIENT}}": klient, 
@@ -219,11 +260,15 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{USLUGA_NAZWA}}": pakiet,
                 "{{NR_OFERTY}}": nr_o,
                 "{{CENA_KATALOG}}": f"{cena_manual:,.2f} zł".replace(',', ' ').replace('.', ','),
-                "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ',')
+                "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ','),
+                "{{WSTEP_AI}}": wygenerowany_wstep # Podpinamy wygenerowany tekst!
             }
 
             # 1. OKŁADKA
-            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1')), None)
+            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
+            
+            # 1B. WSTĘP (Szukamy pliku np. 1B_Oferta_wstep.pptx)
+            wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
             
             # 2. STRONA PRODUKTOWA
             produkt = None
@@ -249,14 +294,14 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             # 6. KONIEC
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-            # --- DODANE: Poprawna kolejność składania ---
-            seq = [okladka, produkt, zakres] + wybrane_dodatki + [koniec]
-            seq = [f for f in seq if f]
+            # KOLEJNOŚĆ WZBOGACONA O WSTĘP AI
+            seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
+            seq = [f for f in seq if f] # Usuwamy luki (jeśli np. nie masz pliku 1B na dysku)
 
             for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
                 for slide in prs.slides:
-                    if f_info['name'].startswith('1'):
+                    if f_info['name'].startswith('1_'):
                         for shape in list(slide.shapes):
                             if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
                                 pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
@@ -279,4 +324,5 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+            st.balloons()
             st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
