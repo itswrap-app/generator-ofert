@@ -99,12 +99,11 @@ def generate_ai_image(prompt):
     st.info("Brak wsparcia Google Imagen w UE. Użyto idealnie dociętego, eleganckiego tła zastępczego.")
     return out_fallback.getvalue()
 
-# 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
+# 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI (Z INTELIGENTNYM FALLBACKIEM)
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
-    # Wyciągamy samo imię i odcinamy to co w nawiasach w nazwie folii
     imie = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
     
@@ -116,37 +115,59 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     - Auto: {brand} {model}
     - Folia: {czysta_folia}
     
-    BEZWZGLĘDNE ZASADY (MUSISZ ICH PRZESTRZEGAĆ W 100%):
-    1. ZWROT GRZECZNOŚCIOWY: Odmień imię w wołaczu! 
-       Przykłady: Tomasz -> Panie Tomaszu, Adam -> Panie Adamie, Piotr -> Panie Piotrze, Anna -> Pani Anno, Michał -> Panie Michale.
-    2. AUTO: Użyj sformułowania "dla Twojego [Marka]". 
-       Przykłady: "dla Twojego Audi", "dla Twojego Forda", "dla Twojego BMW", "dla Twojego Maserati". 
-       KATEGORYCZNIE ZABRONIONE jest pisanie "dla pojazdu marki" lub "dla samochodu marki".
-    3. STYL: Pisz w pierwszej osobie liczby pojedynczej ("dobrałem", "przygotowałem", "gwarantuję"). Zbuduj ofertę wokół folii {czysta_folia}.
-    4. PODPIS: Zakończ tekst DOKŁADNIE w ten sposób (zachowaj układ linii):
+    BEZWZGLĘDNE ZASADY:
+    1. ZWROT: Odmień imię w wołaczu! (np. Tomasz -> Panie Tomaszu, Adam -> Panie Adamie, Piotr -> Panie Piotrze).
+    2. AUTO: Użyj "dla Twojego {brand}". (np. "dla Twojego Audi", "dla Twojego Forda"). ZABRONIONE jest pisanie "dla pojazdu marki".
+    3. STYL: Pisz w 1. osobie liczby pojedynczej ("dobrałem"). 
+    4. PODPIS: Zakończ tekst DOKŁADNIE tak:
     
     Z motoryzacyjnym pozdrowieniem,
     Adam Trepka
     CEO It`s Wrap
     
-    Długość całego tekstu: maksymalnie 4 zdania + podpis. Bez pogrubień (*).
+    Długość całego tekstu: max 4 zdania + podpis. Bez pogrubień (*).
     """
     
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
     try:
         response = requests.post(url, json=payload, timeout=30)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        else:
+            # Wyrzuca błąd na ekran, żebyśmy widzieli, co blokuje Google!
+            st.warning(f"Błąd AI Text: {response.text}")
     except Exception as e:
         pass
     
-    # --- ULEPSZONY TEKST AWARYJNY ---
-    # Jeśli API nie odpowie, używamy bardzo bezpiecznego fallbacku, który też brzmi dobrze
-    return f"Szanowny Kliencie,\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego auta, wybraliśmy najwyższej jakości folię {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
+    # --- PROGRAMISTYCZNY, INTELIGENTNY FALLBACK (Działa zawsze, nawet bez internetu!) ---
+    wolacz = "Szanowny Kliencie"
+    if imie:
+        imie_lower = imie.lower()
+        if imie_lower.endswith('a'):
+            wolacz = f"Pani {imie}"
+        elif imie_lower in ["tomasz", "łukasz", "mateusz", "janusz", "mariusz"]:
+            wolacz = f"Panie {imie}u"
+        elif imie_lower in ["adam", "michal", "michał", "kamil", "marcin"]:
+            wolacz = f"Panie {imie}ie"
+        elif imie_lower in ["piotr", "kacper", "wiktor"]:
+            wolacz = f"Panie {imie}ze"
+        elif imie_lower.endswith('ek'):
+            wolacz = f"Panie {imie[:-2]}ku"
+        elif imie_lower.endswith(('i', 'y')):
+            wolacz = f"Panie {imie}"
+        else:
+            wolacz = f"Panie {imie}" # Względnie bezpieczna baza
+            
+    # Odmiana marki (najpopularniejsze)
+    marka = brand
+    if brand == "Toyota": marka = "Toyoty"
+    elif brand == "Skoda": marka = "Skody"
+    elif brand == "Kia": marka = "Kii"
+    elif brand == "Tesla": marka = "Tesli"
+    elif brand == "Porsche": marka = "Porsche"
 
+    return f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
