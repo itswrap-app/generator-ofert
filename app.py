@@ -100,31 +100,30 @@ def generate_ai_image(prompt):
     return out_fallback.getvalue()
 
 # 2. NOWOŚĆ: FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
-# 2. NOWOŚĆ: FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
-    # Używamy ultra-szybkiego modelu tekstowego Gemini 1.5 Flash
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
-    # Pomagamy modelowi, wyciągając samo imię z pola "Imię i Nazwisko"
-    imie = klient.split()[0] if klient.strip() != "" else "Kliencie"
+    # Wyciągamy samo imię i czyścimy nazwę folii z nawiasów (żeby brzmiało naturalnie)
+    imie = klient.split()[0] if klient.strip() != "" else ""
+    czysta_folia = folia.split('(')[0].strip()
     
     prompt = f"""
-    Jesteś właścicielem ekskluzywnego studia auto detailingu 'ITS WRAP'. Piszesz OSOBIŚCIE (w pierwszej osobie) list powitalny do klienta, który znajdzie się na pierwszej stronie oferty.
+    Jesteś właścicielem ekskluzywnego studia auto detailingu ITS WRAP. Piszesz krótki wstęp do oferty dla klienta.
     
-    Dane do wplecenia w tekst:
-    - Imię i nazwisko klienta: {klient} (samo imię to prawdopodobnie: {imie})
+    Dane:
+    - Imię klienta: {imie}
     - Samochód: {brand} {model}
-    - Wybrana folia: {folia}
+    - Wybrana folia: {czysta_folia}
     
-    BARDZO WAŻNE WYTYCZNE JĘZYKOWE:
-    1. Rozpocznij od zwrotu do adresata, odmieniając imię do wołacza z formą grzecznościową (np. "Panie Adamie,", "Pani Anno,"). Jeśli klient to firma, użyj "Szanowni Państwo,".
-    2. Odmień markę samochodu, np. "dla Twojego Forda", "dla Twojego Audi", "dla Twojego BMW".
-    3. Napisz tekst jako szef salonu (np. "Dziękuję za wybór naszej firmy. Komponując ofertę dla Twojego [Marka] dobraliśmy najwyższej jakości folię {folia}...").
-    4. Podkreśl, że ten wybór gwarantuje najwyższą jakość ochrony samochodu na długie lata.
-    5. Na koniec dodaj jedno zdanie serdecznie zapraszające do zapoznania się ze szczegółami poniższej oferty.
-    6. Zakończ zwrotem "Z motoryzacyjnym pozdrowieniem," a w nowej linii podpisz się jako "Właściciel ITS WRAP" (NIE używaj słowa "Zespół").
-    7. Całość ma mieć ok. 4-5 zdań. Pisz czystym tekstem, bez pogrubień i znaków markdown (*).
+    BARDZO WAŻNE WYTYCZNE:
+    1. Zacznij od zwrotu grzecznościowego z imieniem w wołaczu (np. "Panie Tomaszu,", "Pani Anno,").
+    2. Odmień markę auta (np. "dla Twojego Forda", "dla Twojego Audi", "dla Twojego BMW"). NIE UŻYWAJ sformułowania "samochodu marki".
+    3. Folia {czysta_folia} to główny produkt i serce tej oferty. Zbuduj wokół niej wartość (np. "dobraliśmy najwyższej jakości folię...").
+    4. Pisz w 1. osobie liczby pojedynczej jako szef (np. "gwarantuję", "dobrałem").
+    5. Zakończ JEDNYM zdaniem zapraszającym do zapoznania się z ofertą.
+    6. KATEGORYCZNY ZAKAZ: NIE dodawaj ŻADNEGO podpisu na końcu. Żadnego "Pozdrawiam", "Z poważaniem", "Zespół ITS WRAP". Zakończ tekst po prostu kropką po zaproszeniu do lektury.
+    7. Max 4 zdania. Bez formatowania markdown (bez gwiazdek).
     """
     
     payload = {
@@ -134,25 +133,18 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     try:
         response = requests.post(url, json=payload, timeout=30)
         if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            tekst = response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            # Dodatkowe zabezpieczenie programistyczne - ucinamy, gdyby AI jednak wcisnęło podpis
+            tekst = tekst.replace("Z motoryzacyjnym pozdrowieniem,", "").replace("Właściciel ITS WRAP", "").replace("Pozdrawiam,", "").strip()
+            return tekst
     except Exception as e:
         pass
     
-    # Ulepszony tekst awaryjny na wypadek braku internetu/awarii API
-    return f"Szanowny Kliencie,\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego pojazdu marki {brand}, dobraliśmy najwyższej jakości rozwiązania, w tym folię {folia}. Dzięki temu mogę zagwarantować najwyższą jakość ochrony Twojego samochodu na długie lata.\n\nSerdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nWłaściciel ITS WRAP"
-def download_file(service, file_id):
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done: _, done = downloader.next_chunk()
-    fh.seek(0); return fh
-
-def pptx_to_pdf(input_path):
-    try:
-        subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
-        return os.path.basename(input_path).replace('.pptx', '.pdf')
-    except: return None
-
+    # --- ULEPSZONY TEKST AWARYJNY (Fallback) ---
+    # Jeśli API nie zadziała, używamy sprytnego tekstu zastępczego bez "marki" i bez podpisów
+    zwrot = f"Panie {imie}," if imie and not imie.endswith('a') else (f"Pani {imie}," if imie else "Dzień dobry,")
+    
+    return f"{zwrot}\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego auta, wybraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. To ona stanowi fundament naszej usługi, a dzięki niej mogę zagwarantować najwyższą jakość ochrony pojazdu na długie lata.\n\nSerdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny."
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
