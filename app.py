@@ -99,17 +99,17 @@ def generate_ai_image(prompt):
     st.info("Brak wsparcia Google Imagen w UE. Użyto idealnie dociętego, eleganckiego tła zastępczego.")
     return out_fallback.getvalue()
 
-# 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI (Z INTELIGENTNYM FALLBACKIEM)
+# 2. FUNKCJA GENEROWANIA UNIKALNEGO TEKSTU AI
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
-    # Zmieniony model na sprawdzony i stabilny gemini-pro
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
     
     imie = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
     
     prompt = f"""
-    Napisz krótki wstęp do oferty oklejania auta jako Adam Trepka, CEO studia ITS WRAP.
+    Jako Adam Trepka, CEO ITS WRAP, napisz krótki wstęp do oferty oklejania auta.
+    
+    WYMÓG KREATYWNOŚCI: Ten tekst MUSI być w 100% unikalny i różnić się od poprzednich. Używaj innej struktury zdań, innej formy powitania i innych synonimów, pokazując zaangażowanie i prestiż.
     
     DANE:
     - Imię: {imie}
@@ -117,10 +117,10 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     - Folia: {czysta_folia}
     
     BEZWZGLĘDNE ZASADY:
-    1. ZWROT: Odmień imię w wołaczu! (np. Tomasz -> Panie Tomaszu, Adam -> Panie Adamie, Piotr -> Panie Piotrze, Dominik -> Panie Dominiku).
-    2. AUTO: Użyj "dla Twojego {brand}". (np. "dla Twojego Audi", "dla Twojego Forda"). ZABRONIONE jest pisanie "dla pojazdu marki".
-    3. STYL: Pisz w 1. osobie liczby pojedynczej ("dobrałem"). 
-    4. PODPIS: Zakończ tekst DOKŁADNIE tak:
+    1. ZWROT: Odmień imię w wołaczu! (np. Panie Tomaszu, Panie Adamie, Panie Piotrze, Panie Dominiku).
+    2. AUTO: Użyj "dla Twojego {brand}". ZABRONIONE jest pisanie "dla pojazdu marki" lub "dla samochodu marki".
+    3. STYL: Pisz w 1. osobie liczby pojedynczej ("dobrałem", "zdecydowałem"). Pokaż pasję.
+    4. PODPIS: Zakończ tekst DOKŁADNIE w ten sposób:
     
     Z motoryzacyjnym pozdrowieniem,
     Adam Trepka
@@ -129,42 +129,41 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     Długość całego tekstu: max 4 zdania + podpis. Bez pogrubień (*).
     """
     
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    # "temperature": 0.9 gwarantuje dużą losowość i unikalność wypowiedzi
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.9}
+    }
     
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        else:
-            # Pokaże się tylko, jeśli będzie problem z kontem API
-            st.warning(f"Błąd AI Text: Brak połączenia. Używam niezawodnego systemu zapasowego.")
-    except Exception as e:
-        pass
+    # Lista modeli do przetestowania (omijamy błędy 404)
+    modele_do_sprawdzenia = [
+        "gemini-1.5-flash-latest",
+        "gemini-1.0-pro-latest"
+    ]
+    
+    for model_name in modele_do_sprawdzenia:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            response = requests.post(url, json=payload, timeout=20)
+            if response.status_code == 200:
+                return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        except Exception:
+            continue
     
     # --- PROGRAMISTYCZNY, INTELIGENTNY FALLBACK ---
     wolacz = "Szanowny Kliencie"
     if imie:
         imie_lower = imie.lower()
-        if imie_lower.endswith('a'):
-            wolacz = f"Pani {imie}"
-        elif imie_lower.endswith(('ik', 'yk')): # Dominik, Patryk
-            wolacz = f"Panie {imie}u"
-        elif imie_lower.endswith('id'): # Dawid
-            wolacz = f"Panie {imie}zie"
-        elif imie_lower in ["tomasz", "łukasz", "mateusz", "janusz", "mariusz"]:
-            wolacz = f"Panie {imie}u"
-        elif imie_lower in ["adam", "michal", "michał", "kamil", "marcin", "adrian", "krystian"]:
-            wolacz = f"Panie {imie}ie"
-        elif imie_lower in ["piotr", "kacper", "wiktor"]:
-            wolacz = f"Panie {imie}ze"
-        elif imie_lower.endswith('ek'):
-            wolacz = f"Panie {imie[:-2]}ku"
-        elif imie_lower.endswith(('i', 'y')):
-            wolacz = f"Panie {imie}"
-        else:
-            wolacz = f"Panie {imie}"
+        if imie_lower.endswith('a'): wolacz = f"Pani {imie}"
+        elif imie_lower.endswith(('ik', 'yk')): wolacz = f"Panie {imie}u"
+        elif imie_lower.endswith('id'): wolacz = f"Panie {imie}zie"
+        elif imie_lower in ["tomasz", "łukasz", "mateusz", "janusz", "mariusz"]: wolacz = f"Panie {imie}u"
+        elif imie_lower in ["adam", "michal", "michał", "kamil", "marcin", "adrian", "krystian"]: wolacz = f"Panie {imie}ie"
+        elif imie_lower in ["piotr", "kacper", "wiktor"]: wolacz = f"Panie {imie}ze"
+        elif imie_lower.endswith('ek'): wolacz = f"Panie {imie[:-2]}ku"
+        elif imie_lower.endswith(('i', 'y')): wolacz = f"Panie {imie}"
+        else: wolacz = f"Panie {imie}"
             
-    # Odmiana marki
     marka = brand
     if brand == "Toyota": marka = "Toyoty"
     elif brand == "Skoda": marka = "Skody"
@@ -282,7 +281,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
     if 'ai_img' not in st.session_state:
         st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
     else:
-        with st.spinner("AI analizuje ofertę i pisze spersonalizowany list powitalny..."):
+        with st.spinner("AI analizuje ofertę i pisze w 100% unikalny list powitalny..."):
             final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
             wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text)
             
