@@ -9,6 +9,7 @@ import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
 from PIL import Image
+import random
 
 # --- PEŁNA BAZA SAMOCHODÓW ---
 CAR_DATABASE = {
