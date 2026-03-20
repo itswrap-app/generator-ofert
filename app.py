@@ -99,7 +99,7 @@ def generate_ai_image(prompt):
     st.info("Brak wsparcia Google Imagen w UE. Użyto idealnie dociętego, eleganckiego tła zastępczego.")
     return out_fallback.getvalue()
 
-# 2. NOWOŚĆ: FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
+# 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
@@ -141,10 +141,23 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
         pass
     
     # --- ULEPSZONY TEKST AWARYJNY (Fallback) ---
-    # Jeśli API nie zadziała, używamy sprytnego tekstu zastępczego bez "marki" i bez podpisów
     zwrot = f"Panie {imie}," if imie and not imie.endswith('a') else (f"Pani {imie}," if imie else "Dzień dobry,")
     
     return f"{zwrot}\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego auta, wybraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. To ona stanowi fundament naszej usługi, a dzięki niej mogę zagwarantować najwyższą jakość ochrony pojazdu na długie lata.\n\nSerdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny."
+
+def download_file(service, file_id):
+    request = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done: _, done = downloader.next_chunk()
+    fh.seek(0); return fh
+
+def pptx_to_pdf(input_path):
+    try:
+        subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
+        return os.path.basename(input_path).replace('.pptx', '.pdf')
+    except: return None
+
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
@@ -238,7 +251,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
     if 'ai_img' not in st.session_state:
         st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
     else:
-        # NOWY KROK: AI generuje tekst wstępu przed złożeniem PDF-a
+        # Generowanie spersonalizowanego tekstu przez AI
         with st.spinner("AI analizuje ofertę i pisze spersonalizowany list powitalny dla klienta..."):
             final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
             wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text)
@@ -254,13 +267,13 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{NR_OFERTY}}": nr_o,
                 "{{CENA_KATALOG}}": f"{cena_manual:,.2f} zł".replace(',', ' ').replace('.', ','),
                 "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ','),
-                "{{WSTEP_AI}}": wygenerowany_wstep # Podpinamy wygenerowany tekst!
+                "{{WSTEP_AI}}": wygenerowany_wstep # Podpinamy wygenerowany tekst
             }
 
             # 1. OKŁADKA
             okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
             
-            # 1B. WSTĘP (Szukamy pliku np. 1B_Oferta_wstep.pptx)
+            # 1B. WSTĘP AI
             wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
             
             # 2. STRONA PRODUKTOWA
@@ -289,7 +302,7 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
 
             # KOLEJNOŚĆ WZBOGACONA O WSTĘP AI
             seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
-            seq = [f for f in seq if f] # Usuwamy luki (jeśli np. nie masz pliku 1B na dysku)
+            seq = [f for f in seq if f]
 
             for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
