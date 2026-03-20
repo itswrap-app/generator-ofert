@@ -100,56 +100,12 @@ def generate_ai_image(prompt):
     st.info("Brak wsparcia Google Imagen w UE. Użyto idealnie dociętego, eleganckiego tła zastępczego.")
     return out_fallback.getvalue()
 
-# 2. FUNKCJA GENEROWANIA UNIKALNEGO TEKSTU AI
+# 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU (Z LOSOWYMI SZABLONAMI)
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
-    api_key = st.secrets["GEMINI_API_KEY"]
+    import random # Upewniamy się, że losowanie działa
     
     imie = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
-    
-    prompt = f"""
-    Jako Adam Trepka, CEO ITS WRAP, napisz krótki wstęp do oferty oklejania auta.
-    
-    WYMÓG KREATYWNOŚCI: Ten tekst MUSI być w 100% unikalny i różnić się od poprzednich. Używaj innej struktury zdań, innej formy powitania i innych synonimów, pokazując zaangażowanie i prestiż.
-    
-    DANE:
-    - Imię: {imie}
-    - Auto: {brand} {model}
-    - Folia: {czysta_folia}
-    
-    BEZWZGLĘDNE ZASADY:
-    1. ZWROT: Odmień imię w wołaczu! (np. Panie Tomaszu, Panie Adamie, Panie Piotrze, Panie Dominiku).
-    2. AUTO: Użyj "dla Twojego {brand}". ZABRONIONE jest pisanie "dla pojazdu marki" lub "dla samochodu marki".
-    3. STYL: Pisz w 1. osobie liczby pojedynczej ("dobrałem", "zdecydowałem"). Pokaż pasję.
-    4. PODPIS: Zakończ tekst DOKŁADNIE w ten sposób:
-    
-    Z motoryzacyjnym pozdrowieniem,
-    Adam Trepka
-    CEO It`s Wrap
-    
-    Długość całego tekstu: max 4 zdania + podpis. Bez pogrubień (*).
-    """
-    
-    # "temperature": 0.9 gwarantuje dużą losowość i unikalność wypowiedzi
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.9}
-    }
-    
-    # Lista modeli do przetestowania (omijamy błędy 404)
-    modele_do_sprawdzenia = [
-        "gemini-1.5-flash-latest",
-        "gemini-1.0-pro-latest"
-    ]
-    
-    for model_name in modele_do_sprawdzenia:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        try:
-            response = requests.post(url, json=payload, timeout=20)
-            if response.status_code == 200:
-                return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        except Exception:
-            continue
     
     # --- PROGRAMISTYCZNY, INTELIGENTNY FALLBACK ---
     wolacz = "Szanowny Kliencie"
@@ -174,8 +130,26 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     elif brand == "Honda": marka = "Hondy"
     elif brand == "Mazda": marka = "Mazdy"
 
-    return f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
+    # --- BAZA UNIKALNYCH SZABLONÓW ---
+    szablony = [
+        # Szablon 1: Klasyczny, oparty na zaufaniu
+        f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.",
+        
+        # Szablon 2: Skupiony na pasji i detalach
+        f"{wolacz},\n\nMotoryzacja to nasza największa pasja, dlatego do ochrony Twojego {marka} podszedłem z najwyższą starannością. Wybrana przez nas folia {czysta_folia} to absolutna czołówka w świecie auto detailingu. Gwarantuje ona, że Twój samochód zachowa nieskazitelny wygląd przez wiele lat. Zapraszam do lektury poniższej oferty.",
+        
+        # Szablon 3: Krótki, z naciskiem na jakość premium
+        f"{wolacz},\n\nW ITS WRAP nie uznajemy kompromisów. Właśnie dlatego, tworząc tę wycenę dla Twojego {marka}, zdecydowałem się na zastosowanie niezawodnej folii {czysta_folia}. To inwestycja, która zapewni Ci spokój ducha i perfekcyjną prezencję auta na drodze. Zachęcam do zapoznania się ze szczegółami.",
+        
+        # Szablon 4: Indywidualne podejście
+        f"{wolacz},\n\nKażdy samochód traktujemy w naszym studiu całkowicie indywidualnie. Aby wydobyć i trwale zabezpieczyć piękno Twojego {marka}, przygotowałem zestawienie oparte na innowacyjnej technologii folii {czysta_folia}. Z przyjemnością zaprezentuję Ci korzyści płynące z tego wyboru w poniższej ofercie."
+    ]
 
+    # Losujemy jeden z szablonów
+    wybrany_tekst = random.choice(szablony)
+
+    # Doklejamy stały podpis na końcu
+    return f"{wybrany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
