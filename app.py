@@ -100,29 +100,31 @@ def generate_ai_image(prompt):
     return out_fallback.getvalue()
 
 # 2. NOWOŚĆ: FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
+# 2. NOWOŚĆ: FUNKCJA GENEROWANIA TEKSTU WSTĘPU AI
 def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     api_key = st.secrets["GEMINI_API_KEY"]
     # Używamy ultra-szybkiego modelu tekstowego Gemini 1.5 Flash
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
-    nazwa_klienta = klient if klient.strip() != "" else "Szanowny Kliencie"
+    # Pomagamy modelowi, wyciągając samo imię z pola "Imię i Nazwisko"
+    imie = klient.split()[0] if klient.strip() != "" else "Kliencie"
     
     prompt = f"""
-    Jesteś właścicielem ekskluzywnego studia auto detailingu i oklejania foliami PPF o nazwie 'ITS WRAP'.
-    Napisz krótki, prestiżowy list powitalny/wstęp do oferty dla klienta.
+    Jesteś właścicielem ekskluzywnego studia auto detailingu 'ITS WRAP'. Piszesz OSOBIŚCIE (w pierwszej osobie) list powitalny do klienta, który znajdzie się na pierwszej stronie oferty.
     
-    Dane:
-    - Klient: {nazwa_klienta}
-    - Samochód klienta: {brand} {model}
-    - Usługa, którą wyceniamy: {pakiet}
+    Dane do wplecenia w tekst:
+    - Imię i nazwisko klienta: {klient} (samo imię to prawdopodobnie: {imie})
+    - Samochód: {brand} {model}
     - Wybrana folia: {folia}
     
-    Wytyczne:
-    - Ton: Profesjonalny, pełen pasji do motoryzacji, budujący zaufanie.
-    - Długość: Maksymalnie 3-4 zdania (krótko, zwięźle i na temat, żeby dobrze wyglądało na slajdzie).
-    - Treść: Podziękuj za zapytanie o auto {brand} {model}. Podkreśl, że w ITS WRAP stawiamy na bezkompromisową jakość i że wybrane rozwiązanie ({folia}) doskonale zabezpieczy / odmieni ten pojazd.
-    - NIE UŻYWAJ formatowania markdown (żadnych gwiazdek, pogrubień). Pisz czystym tekstem.
-    - Zakończ zwrotem: 'Z motoryzacyjnym pozdrowieniem, Zespół ITS WRAP'
+    BARDZO WAŻNE WYTYCZNE JĘZYKOWE:
+    1. Rozpocznij od zwrotu do adresata, odmieniając imię do wołacza z formą grzecznościową (np. "Panie Adamie,", "Pani Anno,"). Jeśli klient to firma, użyj "Szanowni Państwo,".
+    2. Odmień markę samochodu, np. "dla Twojego Forda", "dla Twojego Audi", "dla Twojego BMW".
+    3. Napisz tekst jako szef salonu (np. "Dziękuję za wybór naszej firmy. Komponując ofertę dla Twojego [Marka] dobraliśmy najwyższej jakości folię {folia}...").
+    4. Podkreśl, że ten wybór gwarantuje najwyższą jakość ochrony samochodu na długie lata.
+    5. Na koniec dodaj jedno zdanie serdecznie zapraszające do zapoznania się ze szczegółami poniższej oferty.
+    6. Zakończ zwrotem "Z motoryzacyjnym pozdrowieniem," a w nowej linii podpisz się jako "Właściciel ITS WRAP" (NIE używaj słowa "Zespół").
+    7. Całość ma mieć ok. 4-5 zdań. Pisz czystym tekstem, bez pogrubień i znaków markdown (*).
     """
     
     payload = {
@@ -136,9 +138,8 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     except Exception as e:
         pass
     
-    # Tekst awaryjny w razie braku połączenia z API
-    return f"{nazwa_klienta},\n\nDziękujemy za zaufanie i zainteresowanie usługami ITS WRAP dla Twojego auta {brand} {model}. Przygotowaliśmy dla Ciebie indywidualną ofertę, która zagwarantuje najwyższą jakość i nieskazitelny wygląd pojazdu na lata.\n\nZ motoryzacyjnym pozdrowieniem,\nZespół ITS WRAP"
-
+    # Ulepszony tekst awaryjny na wypadek braku internetu/awarii API
+    return f"Szanowny Kliencie,\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego pojazdu marki {brand}, dobraliśmy najwyższej jakości rozwiązania, w tym folię {folia}. Dzięki temu mogę zagwarantować najwyższą jakość ochrony Twojego samochodu na długie lata.\n\nSerdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.\n\nZ motoryzacyjnym pozdrowieniem,\nWłaściciel ITS WRAP"
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
