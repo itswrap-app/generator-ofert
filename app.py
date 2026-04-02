@@ -274,23 +274,34 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{WSTEP_AI}}": wygenerowany_wstep
             }
 
-            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
+okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
             wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
             
+            # --- ZAKTUALIZOWANA LOGIKA WYBORU STRONY PRODUKTOWEJ ---
             produkt = None
-            if "Ultimate" in f_color:
+            
+            # 1. Oklejanie reklamowe (rozpoznaje, jeśli w nazwie usługi z cennika jest słowo "reklam")
+            if "reklam" in pakiet.lower():
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
+                
+            # 2. Folie 3M Zmiana koloru
+            elif f_brand == "3M 2080 Series":
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and '3m' in f['name'].lower() and 'kolor' in f['name'].lower()), None)
+                
+            # 3. Folie XPEL (dotychczasowe)
+            elif "Ultimate" in f_color: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
-            elif "Stealth" in f_color:
+            elif "Stealth" in f_color: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'stealth' in f['name'].lower()), None)
-            elif "Color" in f_cat:
+            elif "Color" in f_cat: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
             
-            if not produkt:
+            # 4. Fallback (awaryjnie bierze jakikolwiek plik zaczynający się na "2")
+            if not produkt: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+            # ----------------------------------------------------------
 
-            if rabat > 0:
-                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
-            else:
+            if rabat > 0: zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)            else:
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
             
             if not zakres:
