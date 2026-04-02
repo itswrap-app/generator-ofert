@@ -11,6 +11,20 @@ from datetime import datetime
 from PIL import Image
 import random
 
+# --- BAZA OPIEKUNÓW / HANDLOWCÓW ---
+HANDLOWCY = {
+    "Adam Trepka": {
+        "stanowisko": "CEO It`s Wrap",
+        "telefon": "+48 111 222 333",
+        "email": "adam@itswrap.pl"
+    },
+    "Jan Kowalski": {
+        "stanowisko": "Specjalista ds. Detailingu",
+        "telefon": "+48 444 555 666",
+        "email": "jan@itswrap.pl"
+    }
+}
+
 # --- PEŁNA BAZA SAMOCHODÓW ---
 CAR_DATABASE = {
     "Audi": {"A3": ["Hatchback", "Sedan"], "A4": ["Sedan", "Kombi"], "A6": ["Sedan", "Kombi"], "Q3": ["SUV"], "Q5": ["SUV"], "Q8": ["SUV"], "e-tron GT": ["Sedan"], "RS6": ["Kombi"]},
@@ -65,7 +79,6 @@ def install_fonts():
             if f.lower().endswith((".ttf", ".otf")): shutil.copy(os.path.join(font_src, f), font_dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
 
-# 1. FUNKCJA GENEROWANIA ZDJĘĆ AI
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
@@ -97,29 +110,28 @@ def generate_ai_image(prompt):
     img_fallback = Image.new('RGB', (2100, 1870), color=(40, 40, 45))
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
-    st.info("Brak wsparcia Google Imagen w UE. Użyto idealnie dociętego, eleganckiego tła zastępczego.")
     return out_fallback.getvalue()
 
-# 2. FUNKCJA GENEROWANIA TEKSTU WSTĘPU (Z LOSOWYMI SZABLONAMI)
-def generate_ai_intro_text(klient, brand, model, pakiet, folia):
-    import random # Upewniamy się, że losowanie działa
-    
-    imie = klient.split()[0] if klient.strip() != "" else ""
+def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
+    imie_surowe = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
     
-    # --- PROGRAMISTYCZNY, INTELIGENTNY FALLBACK ---
     wolacz = "Szanowny Kliencie"
-    if imie:
+    if imie_surowe:
+        imie = imie_surowe.title()
         imie_lower = imie.lower()
         if imie_lower.endswith('a'): wolacz = f"Pani {imie}"
-        elif imie_lower.endswith(('ik', 'yk')): wolacz = f"Panie {imie}u"
-        elif imie_lower.endswith('id'): wolacz = f"Panie {imie}zie"
-        elif imie_lower in ["tomasz", "łukasz", "mateusz", "janusz", "mariusz"]: wolacz = f"Panie {imie}u"
-        elif imie_lower in ["adam", "michal", "michał", "kamil", "marcin", "adrian", "krystian"]: wolacz = f"Panie {imie}ie"
-        elif imie_lower in ["piotr", "kacper", "wiktor"]: wolacz = f"Panie {imie}ze"
-        elif imie_lower.endswith('ek'): wolacz = f"Panie {imie[:-2]}ku"
-        elif imie_lower.endswith(('i', 'y')): wolacz = f"Panie {imie}"
-        else: wolacz = f"Panie {imie}"
+        else:
+            wyjatki = {"piotr": "Piotrze", "paweł": "Pawle", "kacper": "Kacprze", "marek": "Marku", "michał": "Michale", "michal": "Michale", "rafał": "Rafale", "kamil": "Kamilu", "karol": "Karolu", "jerzy": "Jerzy", "igor": "Igorze", "donald": "Donaldzie", "konrad": "Konradzie", "dawid": "Dawidzie", "ryszard": "Ryszardzie", "krzysztof": "Krzysztofie", "maciej": "Macieju", "mikołaj": "Mikołaju", "bartłomiej": "Bartłomieju"}
+            if imie_lower in wyjatki: wolacz = f"Panie {wyjatki[imie_lower]}"
+            else:
+                if imie_lower.endswith('d'): wolacz = f"Panie {imie}zie"
+                elif imie_lower.endswith(('k', 'g', 'ch', 'j', 'sz', 'cz', 'rz', 'l', 'c')):
+                    if imie_lower.endswith('ek'): wolacz = f"Panie {imie[:-2]}ku"
+                    else: wolacz = f"Panie {imie}u"
+                elif imie_lower.endswith(('n', 'm', 'b', 'w', 'f', 's', 'z', 't', 'p')): wolacz = f"Panie {imie}ie"
+                elif imie_lower.endswith('r'): wolacz = f"Panie {imie}ze"
+                else: wolacz = f"Panie {imie}"
             
     marka = brand
     if brand == "Toyota": marka = "Toyoty"
@@ -130,26 +142,19 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia):
     elif brand == "Honda": marka = "Hondy"
     elif brand == "Mazda": marka = "Mazdy"
 
-    # --- BAZA UNIKALNYCH SZABLONÓW ---
     szablony = [
-        # Szablon 1: Klasyczny, oparty na zaufaniu
         f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.",
-        
-        # Szablon 2: Skupiony na pasji i detalach
         f"{wolacz},\n\nMotoryzacja to nasza największa pasja, dlatego do ochrony Twojego {marka} podszedłem z najwyższą starannością. Wybrana przez nas folia {czysta_folia} to absolutna czołówka w świecie auto detailingu. Gwarantuje ona, że Twój samochód zachowa nieskazitelny wygląd przez wiele lat. Zapraszam do lektury poniższej oferty.",
-        
-        # Szablon 3: Krótki, z naciskiem na jakość premium
         f"{wolacz},\n\nW ITS WRAP nie uznajemy kompromisów. Właśnie dlatego, tworząc tę wycenę dla Twojego {marka}, zdecydowałem się na zastosowanie niezawodnej folii {czysta_folia}. To inwestycja, która zapewni Ci spokój ducha i perfekcyjną prezencję auta na drodze. Zachęcam do zapoznania się ze szczegółami.",
-        
-        # Szablon 4: Indywidualne podejście
-        f"{wolacz},\n\nKażdy samochód traktujemy w naszym studiu całkowicie indywidualnie. Aby wydobyć i trwale zabezpieczyć piękno Twojego {marka}, przygotowałem zestawienie oparte na innowacyjnej technologii folii {czysta_folia}. Z przyjemnością zaprezentuję Ci korzyści płynące z tego wyboru w poniższej ofercie."
+        f"{wolacz},\n\nKażdy samochód traktujemy w naszym studiu całkowicie indywidualnie. Aby wydobyć i trwale zabezpieczyć piękno Twojego {marka}, przygotowałem zestawienie oparte na innowacyjnej technologii folii {czysta_folia}. Z przyjemnością zaprezentuję Ci korzyści płynące z tego wyboru w poniższej ofercie.",
+        f"{wolacz},\n\nOddając w nasze ręce swoje auto, oczekujesz perfekcji, a my zamierzamy ją dostarczyć. Z myślą o Twoim {marka} przygotowałem ofertę bazującą na folii {czysta_folia}, która stanowi rynkowy wzór trwałości i estetyki. Poniższa wycena to pierwszy krok do idealnej ochrony Twojego pojazdu.",
+        f"{wolacz},\n\nZabezpieczenie lakieru to inwestycja, która wymaga najlepszych materiałów. Dlatego do Twojego {marka} wyselekcjonowałem folię {czysta_folia}. Jestem przekonany, że to rozwiązanie spełni Twoje najwyższe oczekiwania i pozwoli cieszyć się nieskazitelnym autem każdego dnia. Zapraszam do zapoznania się z przygotowaną ofertą."
     ]
 
-    # Losujemy jeden z szablonów
     wybrany_tekst = random.choice(szablony)
 
-    # Doklejamy stały podpis na końcu
-    return f"{wybrany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\nAdam Trepka\nCEO It`s Wrap"
+    return f"{wybrany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
+
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
@@ -162,6 +167,18 @@ def pptx_to_pdf(input_path):
         subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
         return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
+
+# --- FUNKCJA ZAPISU DO REJESTRU EXCEL ---
+def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena):
+    try:
+        sheet_rejestr = client.open_by_url("https://docs.google.com/spreadsheets/d/1iqS6geTNP3Bd_Fj_XdS-wCBrKtnGTMNQZYSso70KIkQ/edit").worksheet("Rejestr")
+        dzisiaj = datetime.now().strftime("%Y-%m-%d")
+        nowy_wiersz = [dzisiaj, nr_oferty, handlowiec, klient, auto, usluga, folia, f"{cena} zł", "Nowa"]
+        sheet_rejestr.append_row(nowy_wiersz)
+        return True
+    except Exception as e:
+        st.error(f"Nie udało się zapisać do bazy: {e}")
+        return False
 
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
@@ -179,6 +196,10 @@ df = pd.DataFrame(sheet.get_all_values()[1:], columns=[c.strip() for c in sheet.
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
+    st.title("👤 Opiekun Klienta")
+    wybrany_handlowiec = st.selectbox("Kto przygotowuje ofertę?", list(HANDLOWCY.keys()))
+    
+    st.markdown("---")
     st.title("🚗 Studio AI")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
     
@@ -251,17 +272,17 @@ with col2:
     else:
         st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
-# --- GENEROWANIE OFERTY ---
+# --- GENEROWANIE OFERTY I ZAPIS DO BAZY ---
 if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
     if 'ai_img' not in st.session_state:
         st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
     else:
-        with st.spinner("AI analizuje ofertę i pisze w 100% unikalny list powitalny..."):
-            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
-            wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text)
-            
         with st.spinner("Składam profesjonalny PDF..."):
             writer = PdfWriter()
+            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
+            
+            dane_handlowca = HANDLOWCY[wybrany_handlowiec]
+            wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
 
             replacements = {
                 "{{KLIENT}}": klient, 
@@ -271,16 +292,19 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                 "{{NR_OFERTY}}": nr_o,
                 "{{CENA_KATALOG}}": f"{cena_manual:,.2f} zł".replace(',', ' ').replace('.', ','),
                 "{{CENA_KONCOWA}}": f"{cena_koncowa:,.2f} zł".replace(',', ' ').replace('.', ','),
-                "{{WSTEP_AI}}": wygenerowany_wstep
+                "{{WSTEP_AI}}": wygenerowany_wstep,
+                "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
+                "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
+                "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"]
             }
 
-okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
+            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
             wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
             
             # --- ZAKTUALIZOWANA LOGIKA WYBORU STRONY PRODUKTOWEJ ---
             produkt = None
             
-            # 1. Oklejanie reklamowe (rozpoznaje, jeśli w nazwie usługi z cennika jest słowo "reklam")
+            # 1. Oklejanie reklamowe
             if "reklam" in pakiet.lower():
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
                 
@@ -296,15 +320,17 @@ okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
             elif "Color" in f_cat: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
             
-            # 4. Fallback (awaryjnie bierze jakikolwiek plik zaczynający się na "2")
+            # 4. Fallback
             if not produkt: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
-            # ----------------------------------------------------------
-
-            if rabat > 0: zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)            else:
+            
+            # --- ZAKRES PRAC ---
+            if rabat > 0: 
+                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
+            else: 
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
             
-            if not zakres:
+            if not zakres: 
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
 
             koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
@@ -338,5 +364,10 @@ okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
                 if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+            
+            # --- ZAPIS DO BAZY ---
+            if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa):
+                st.success("✅ Oferta zapisana w systemie CRM!")
+                
             st.balloons()
             st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
