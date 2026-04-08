@@ -81,8 +81,15 @@ def install_fonts():
 
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
-    payload = {"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}}
+    
+    # Zmieniamy model na ULTRA (najwyższa jakość i najświeższa baza danych)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict?key={api_key}"
+    
+    # Wzmacniamy prompt, żeby upewnić model, że chodzi nam o rocznik 2025/najnowszy facelift
+    wzmocniony_prompt = f"{prompt} Highly detailed, brand new latest generation, 2025/2026 facelift model, modern sharp LED headlights, precise automotive design."
+    
+    payload = {"instances": [{"prompt": wzmocniony_prompt}], "parameters": {"sampleCount": 1}}
+    
     try:
         response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
@@ -104,6 +111,9 @@ def generate_ai_image(prompt):
             out_bytes = io.BytesIO()
             img_cropped.save(out_bytes, format='PNG')
             return out_bytes.getvalue()
+        else:
+            # W razie błędu wyświetli na żółto przyczynę
+            st.warning(f"Błąd generowania obrazu: {response.text}")
     except Exception as e:
         pass
         
