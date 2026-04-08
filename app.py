@@ -81,12 +81,11 @@ def install_fonts():
 
 def generate_ai_image(prompt):
     api_key = st.secrets["GEMINI_API_KEY"]
-    
-    # Zmieniamy model na ULTRA (najwyższa jakość i najświeższa baza danych)
+    # Używamy potężnego modelu Ultra, który ma nowszą wiedzę o pojazdach
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict?key={api_key}"
     
-    # Wzmacniamy prompt, żeby upewnić model, że chodzi nam o rocznik 2025/najnowszy facelift
-    wzmocniony_prompt = f"{prompt} Highly detailed, brand new latest generation, 2025/2026 facelift model, modern sharp LED headlights, precise automotive design."
+    # Dodajemy tylko uniwersalny dopisek o dokładności detali, rocznik idzie prosto z paska bocznego
+    wzmocniony_prompt = f"{prompt} Highly detailed, precise factory body styling, sharp focus, 8k resolution."
     
     payload = {"instances": [{"prompt": wzmocniony_prompt}], "parameters": {"sampleCount": 1}}
     
@@ -112,7 +111,6 @@ def generate_ai_image(prompt):
             img_cropped.save(out_bytes, format='PNG')
             return out_bytes.getvalue()
         else:
-            # W razie błędu wyświetli na żółto przyczynę
             st.warning(f"Błąd generowania obrazu: {response.text}")
     except Exception as e:
         pass
@@ -235,11 +233,12 @@ with st.sidebar:
         paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
 
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
+        # Podłączamy zmienną {year} bezpośrednio do żądania modelu, żeby rysował konkretny rocznik
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact {year} factory body styling. Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, cinematic lighting."
         else:
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}) wrapped in {f_brand} {f_color}. High-end detailing garage, HEXAGONAL LED lights, cinematic lighting, 8k resolution, sharp focus."
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact {year} factory body styling. Wrapped in {f_brand} {f_color}. High-end detailing garage, cinematic lighting."
             
         with st.spinner("AI renderuje Twoje auto..."):
             img_data = generate_ai_image(prompt)
@@ -314,15 +313,10 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             # --- ZAKTUALIZOWANA LOGIKA WYBORU STRONY PRODUKTOWEJ ---
             produkt = None
             
-            # 1. Oklejanie reklamowe
             if "reklam" in pakiet.lower():
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
-                
-            # 2. Folie 3M Zmiana koloru
             elif f_brand == "3M 2080 Series":
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and '3m' in f['name'].lower() and 'kolor' in f['name'].lower()), None)
-                
-            # 3. Folie XPEL (dotychczasowe)
             elif "Ultimate" in f_color: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
             elif "Stealth" in f_color: 
@@ -330,11 +324,9 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             elif "Color" in f_cat: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
             
-            # 4. Fallback
             if not produkt: 
                 produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
             
-            # --- ZAKRES PRAC ---
             if rabat > 0: 
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
             else: 
