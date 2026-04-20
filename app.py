@@ -11,6 +11,9 @@ from datetime import datetime
 from PIL import Image
 import random
 
+# --- NOWY LINK DO CENNIKA v3 ---
+LINK_DO_ARKUSZA = "https://docs.google.com/spreadsheets/d/1USF81hOinAP_vvz1QZuoNyRCT1ezJcXTDDB6RjuYtrY/edit"
+
 # --- BAZA OPIEKUNÓW / HANDLOWCÓW ---
 HANDLOWCY = {
     "Adam Trepka": {
@@ -25,25 +28,33 @@ HANDLOWCY = {
     }
 }
 
-# --- MAPOWANIE SEGMENTÓW (Domyślne przypisanie do modeli) ---
-SEGMENTY_AUT = {
-    "Audi": {"A3": "Segment C", "A4": "Segment D", "A6": "Segment D", "Q3": "Segment C", "Q5": "Segment D", "Q8": "Segment E", "RS6": "Segment D", "e-tron GT": "Segment E"},
-    "BMW": {"Seria 3": "Segment D", "Seria 4": "Segment D", "Seria 5": "Segment D", "Seria 7": "Segment E", "X3": "Segment D", "X5": "Segment E", "M3": "Segment D", "M4": "Segment D"},
-    "Porsche": {"911 (992)": "Segment D", "Taycan": "Segment E", "Macan": "Segment D", "Panamera": "Segment E", "Cayenne": "Segment E"},
-    "Tesla": {"Model 3": "Segment D", "Model Y": "Segment D", "Model S": "Segment E", "Model X": "Segment J"},
-    "Toyota": {"Corolla": "Segment C", "Yaris": "Segment B", "RAV4": "Segment D", "C-HR": "Segment C", "Camry": "Segment D"},
-    "Mercedes-Benz": {"Klasa C": "Segment D", "Klasa E": "Segment E", "GLC": "Segment D", "GLE": "Segment E", "Klasa S": "Segment E", "Klasa G": "Segment J"},
-    "Inna marka...": {"Wpisz ręcznie": "Segment D"}
-}
-
-# --- KONFIGURACJA NADWOZIA DLA PROMPTÓW AI ---
-CAR_BODY_TYPES = {
+# --- BAZA AUT I SEGMENTÓW ---
+CAR_DATABASE = {
     "Audi": {"A3": ["Hatchback", "Sedan"], "A4": ["Sedan", "Kombi"], "A6": ["Sedan", "Kombi"], "Q3": ["SUV"], "Q5": ["SUV"], "Q8": ["SUV"], "e-tron GT": ["Sedan"], "RS6": ["Kombi"]},
     "BMW": {"Seria 3": ["Sedan", "Kombi"], "Seria 4": ["Coupe", "Gran Coupe"], "Seria 5": ["Sedan", "Kombi"], "Seria 7": ["Sedan"], "X3": ["SUV"], "X5": ["SUV"], "M3": ["Sedan", "Kombi"], "M4": ["Coupe"]},
+    "BYD": {"Seal": ["Sedan"], "Atto 3": ["SUV"], "Han": ["Sedan"], "Dolphin": ["Hatchback"]},
+    "Ford": {"Focus": ["Hatchback", "Kombi"], "Mustang": ["Coupe", "Cabriolet"], "Mustang Mach-E": ["SUV"], "Puma": ["Crossover"]},
+    "Hyundai": {"Tucson": ["SUV"], "Ioniq 5": ["Hatchback/Crossover"], "Ioniq 6": ["Sedan"], "i30": ["Hatchback", "Kombi"], "Kona": ["Crossover"]},
+    "Kia": {"EV6": ["Crossover"], "Sportage": ["SUV"], "Ceed": ["Hatchback", "Kombi"], "Stinger": ["Liftback"], "Sorento": ["SUV"]},
+    "Lexus": {"NX": ["SUV"], "RX": ["SUV"], "ES": ["Sedan"], "LC": ["Coupe"]},
+    "Mercedes-Benz": {"Klasa C": ["Sedan", "Kombi"], "Klasa E": ["Sedan", "Kombi"], "GLC": ["SUV", "Coupe"], "GLE": ["SUV", "Coupe"], "Klasa G": ["SUV"], "AMG GT": ["Coupe"]},
+    "MG": {"MG4": ["Hatchback"], "HS": ["SUV"], "ZS": ["SUV"], "Cyberster": ["Roadster"]},
+    "NIO": {"ET7": ["Sedan"], "ET5": ["Sedan"], "EL7": ["SUV"]},
     "Porsche": {"911 (992)": ["Coupe", "Cabriolet"], "Taycan": ["Sedan", "Cross Turismo"], "Macan": ["SUV"], "Panamera": ["Sedan"], "Cayenne": ["SUV", "Coupe"]},
+    "Renault": {"Scenic E-Tech": ["Crossover"], "Megane E-Tech": ["Hatchback"], "Austral": ["SUV"], "Clio": ["Hatchback"], "Captur": ["Crossover"]},
+    "Skoda": {"Octavia": ["Liftback", "Kombi"], "Superb": ["Liftback", "Kombi"], "Kodiaq": ["SUV"], "Enyaq": ["SUV", "Coupe"]},
     "Tesla": {"Model 3": ["Sedan"], "Model Y": ["SUV"], "Model S": ["Sedan"], "Model X": ["SUV"]},
     "Toyota": {"Corolla": ["Hatchback", "Sedan", "Kombi"], "Yaris": ["Hatchback"], "RAV4": ["SUV"], "C-HR": ["Crossover"], "Camry": ["Sedan"]},
+    "Volkswagen": {"Golf": ["Hatchback", "Kombi"], "Passat": ["Kombi", "Sedan"], "Arteon": ["Liftback", "Kombi"], "ID.4": ["SUV"], "Tiguan": ["SUV"]},
+    "Volvo": {"XC40": ["SUV"], "XC60": ["SUV"], "XC90": ["SUV"], "V60": ["Kombi"]},
     "Inna marka...": {"Wpisz ręcznie": ["Inne"]}
+}
+
+SEGMENTY_DOMYSLNE = {
+    "Audi": {"A3": "Segment C", "A4": "Segment D", "A6": "Segment D", "Q3": "Segment C", "Q5": "Segment D", "Q8": "Segment E", "e-tron GT": "Segment E", "RS6": "Segment D"},
+    "BMW": {"Seria 3": "Segment D", "Seria 4": "Segment D", "Seria 5": "Segment D", "Seria 7": "Segment E", "X3": "Segment D", "X5": "Segment E", "M3": "Segment D", "M4": "Segment D"},
+    "Porsche": {"911 (992)": "Segment D", "Taycan": "Segment E", "Macan": "Segment D", "Panamera": "Segment E", "Cayenne": "Segment E"},
+    "Tesla": {"Model 3": "Segment D", "Model Y": "Segment D", "Model S": "Segment E", "Model X": "Segment J"}
 }
 
 # --- BAZA FOLII ---
@@ -62,10 +73,14 @@ FOIL_GROUPS = {
         "Satin": ["Satin Black", "Satin Pearl White", "Satin Carmine Red", "Satin Khaki Green", "Satin Metallic Grey"],
         "Gloss": ["Gloss Black", "Gloss White", "Gloss Obsidian Black", "Gloss Rock Grey", "Gloss Carmine Red"],
         "Matte": ["Matte Black", "Matte White", "Matte Charcoal Metallic", "Matte Olive Green"]
+    },
+    "Oracal 970RA": {
+        "Special": ["Gloss Telegrey", "Gloss Nardo Grey Style", "Matte Nato Olive"],
+        "Metallic": ["Gloss Graphite Metallic", "Matte Anthracite Metallic", "Gloss Silver Grey"]
     }
 }
 
-# --- SYSTEMOWE ---
+# --- FUNKCJE SYSTEMOWE ---
 def install_fonts():
     font_src, font_dst = "fonts", os.path.expanduser("~/.local/share/fonts")
     if os.path.exists(font_src):
@@ -101,7 +116,10 @@ def generate_ai_image(prompt):
             st.warning(f"Błąd generowania obrazu: {response.text}")
     except Exception as e:
         pass
-    return None
+    img_fallback = Image.new('RGB', (2100, 1870), color=(40, 40, 45))
+    out_fallback = io.BytesIO()
+    img_fallback.save(out_fallback, format='PNG')
+    return out_fallback.getvalue()
 
 def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
@@ -115,17 +133,25 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie,
             wyjatki = {"piotr": "Piotrze", "paweł": "Pawle", "kacper": "Kacprze", "marek": "Marku", "michał": "Michale", "donald": "Donaldzie", "konrad": "Konradzie", "dawid": "Dawidzie"}
             if imie_lower in wyjatki: wolacz = f"Panie {wyjatki[imie_lower]}"
             elif imie_lower.endswith('d'): wolacz = f"Panie {imie}zie"
-            elif imie_lower.endswith(('k', 'g', 'ch', 'j')): wolacz = f"Panie {imie}u"
-            else: wolacz = f"Panie {imie}ie"
+            elif imie_lower.endswith(('k', 'g', 'ch', 'j', 'sz', 'cz', 'rz', 'l', 'c')):
+                if imie_lower.endswith('ek'): wolacz = f"Panie {imie[:-2]}ku"
+                else: wolacz = f"Panie {imie}u"
+            elif imie_lower.endswith(('n', 'm', 'b', 'w', 'f', 's', 'z', 't', 'p')): wolacz = f"Panie {imie}ie"
+            elif imie_lower.endswith('r'): wolacz = f"Panie {imie}ze"
+            else: wolacz = f"Panie {imie}"
+            
+    marka = brand if brand != "Inna marka..." else ""
     szablony = [
-        f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {brand}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata.",
-        f"{wolacz},\n\nW ITS WRAP nie uznajemy kompromisów. Właśnie dlatego, tworząc tę wycenę dla Twojego {brand}, zdecydowałem się na zastosowanie niezawodnej folii {czysta_folia}. To inwestycja, która zapewni Ci spokój ducha."
+        f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.",
+        f"{wolacz},\n\nW ITS WRAP nie uznajemy kompromisów. Właśnie dlatego, tworząc tę wycenę dla Twojego {marka}, zdecydowałem się na zastosowanie niezawodnej folii {czysta_folia}. To inwestycja, która zapewni Ci spokój ducha i perfekcyjną prezencję auta na drodze. Zachęcam do zapoznania się ze szczegółami."
     ]
-    return f"{random.choice(szablony)}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
+    wybrany_tekst = random.choice(szablony)
+    return f"{wybrany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
 
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request); done = False
+    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
+    done = False
     while not done: _, done = downloader.next_chunk()
     fh.seek(0); return fh
 
@@ -135,8 +161,20 @@ def pptx_to_pdf(input_path):
         return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
 
-# --- APLIKACJA START ---
-st.set_page_config(page_title="ITS WRAP Generator v3", layout="wide")
+# --- ZAPIS DO REJESTRU (v3) ---
+def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena):
+    try:
+        sheet_rejestr = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
+        dzisiaj = datetime.now().strftime("%Y-%m-%d")
+        nowy_wiersz = [dzisiaj, nr_oferty, handlowiec, klient, auto, usluga, folia, f"{cena} zł", "Nowa"]
+        sheet_rejestr.append_row(nowy_wiersz)
+        return True
+    except Exception as e:
+        st.error(f"Nie udało się zapisać do bazy (Rejestr): {e}")
+        return False
+
+# --- APLIKACJA ---
+st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
 install_fonts()
 
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
@@ -146,161 +184,209 @@ client = gspread.authorize(creds)
 results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
-# !!! NOWY LINK v3 !!!
-LINK_DO_CENNIKA = "https://docs.google.com/spreadsheets/d/1USF81hOinAP_vvz1QZuoNyRCT1ezJcXTDDB6RjuYtrY/edit?"
-
+# POBIERANIE CENNIKA v3 (z czyszczeniem enterów w nagłówkach)
 try:
-    sh = client.open_by_url(LINK_DO_CENNIKA)
-    # Pancerne czyszczenie nagłówków
-    sheet_c = sh.worksheet("Cennik usług")
-    nag_c = [c.replace('\n', ' ').replace('\r', '').strip() for c in sheet_c.get_all_values()[0]]
-    df_cennik = pd.DataFrame(sheet_c.get_all_values()[1:], columns=nag_c)
-
-    sheet_r = sh.worksheet("Rejestr")
-    nag_r = [c.replace('\n', ' ').replace('\r', '').strip() for c in sheet_r.get_all_values()[0]]
-    df_rejestr = pd.DataFrame(sheet_r.get_all_values()[1:], columns=nag_r)
+    sheet_cennik = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Cennik usług")
+    naglowki = [c.replace('\n', ' ').replace('\r', '').strip() for c in sheet_cennik.get_all_values()[0]]
+    df_cennik = pd.DataFrame(sheet_cennik.get_all_values()[1:], columns=naglowki)
 except Exception as e:
-    st.error(f"⚠️ Błąd arkusza: {e}")
+    st.error(f"Błąd ładowania Cennika v3. Upewnij się, że link i nazwa zakładki 'Cennik usług' są poprawne. Błąd: {e}")
     st.stop()
 
-# --- LOGIKA CENOWA ---
-def pobierz_cene_uslugi(kategoria, usluga, segment):
-    try:
-        row = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == usluga) & (df_cennik['Segment'] == segment)]
-        if not row.empty:
-            cena_str = str(row['Cena sprzedaży netto PLN'].values[0])
-            cena_str = cena_str.replace(' ', '').replace('\xa0', '')
-            if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
-            cena_czysta = re.sub(r'[^\d.]', '', cena_str)
-            return float(cena_czysta) if cena_czysta else 0.0
-    except:
-        return 0.0
-    return 0.0
-
-def generuj_numer_oferty():
-    try:
-        if df_rejestr.empty: return f"IW/{datetime.now().strftime('%Y/%m')}/001"
-        ostatni_nr = df_rejestr.iloc[-1]['Nr Oferty']
-        numer = int(ostatni_nr.split('/')[-1]) + 1
-        return f"IW/{datetime.now().strftime('%Y/%m')}/{numer:03d}"
-    except:
-        return f"IW/{datetime.now().strftime('%Y/%m')}/001"
-
-# --- UI BOCZNE ---
+# --- PANEL BOCZNY ---
 with st.sidebar:
-    st.title("👤 Konfiguracja")
-    wybrany_handlowiec = st.selectbox("Opiekun", list(HANDLOWCY.keys()))
+    st.title("👤 Opiekun Klienta")
+    wybrany_handlowiec = st.selectbox("Kto przygotowuje ofertę?", list(HANDLOWCY.keys()))
+    
     st.markdown("---")
-    brand = st.selectbox("Marka", list(CAR_BODY_TYPES.keys()))
+    st.title("🚗 Studio AI")
+    brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
+    
     if brand == "Inna marka...":
-        final_brand, final_model, body, segment_domyslny = st.text_input("Marka"), st.text_input("Model"), "Inne", "Segment D"
+        custom_brand = st.text_input("Wpisz markę")
+        custom_model = st.text_input("Wpisz model")
+        final_brand, final_model, body, segment_domyslny = custom_brand, custom_model, "", "Segment D"
     else:
         final_brand = brand
-        final_model = st.selectbox("Model", list(CAR_BODY_TYPES[brand].keys()))
-        body = st.selectbox("Nadwozie", CAR_BODY_TYPES[brand][final_model])
-        segment_domyslny = SEGMENTY_AUT.get(brand, {}).get(final_model, "Segment D")
-    
-    segment_final = st.selectbox("Segment", ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"], 
+        final_model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()))
+        body = st.selectbox("Nadwozie", CAR_DATABASE[brand][final_model])
+        segment_domyslny = SEGMENTY_DOMYSLNE.get(brand, {}).get(final_model, "Segment D")
+        
+    segment_final = st.selectbox("Wybierz Segment (do wyceny)", ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"], 
                                  index=["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"].index(segment_domyslny))
-    
+        
     year = st.selectbox("Rocznik", [str(y) for y in range(2026, 1999, -1)])
-    gen_code = st.text_input("Kod karoserii (np. G70, 992)")
-
+    gen_code = st.text_input("Kod karoserii (Opcjonalnie)", help="Np. G70, 992")
+    
     st.markdown("---")
-    f_brand = st.selectbox("Producent folii", list(FOIL_GROUPS.keys()))
+    st.title("🎨 Folia i Kolor")
+    f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()))
     f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
     f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
-    paint_color = st.text_input("Obecny lakier", value="Czarny metallic") if "Bezbarwne" in f_cat else ""
+
+    paint_color = ""
+    if "Bezbarwne" in f_cat:
+        paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
 
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
-        extra = f" {gen_code} facelift model," if gen_code else ""
-        prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact factory body styling.{extra} Wrapped in {f_brand} {f_color}. Detailing studio background."
-        with st.spinner("Generowanie..."):
-            img = generate_ai_image(prompt)
-            if img: st.session_state['ai_img'] = img
+        extra = f" {gen_code} generation," if gen_code else ""
+        if "Bezbarwne" in f_cat:
+            finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact {year} factory body styling.{extra} Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, cinematic lighting."
+        else:
+            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact {year} factory body styling.{extra} Wrapped in {f_brand} {f_color}. High-end detailing garage, cinematic lighting."
+            
+        with st.spinner("AI renderuje Twoje auto..."):
+            img_data = generate_ai_image(prompt)
+            if img_data:
+                st.session_state['ai_img'] = img_data
+                
+    st.markdown("---")
+    st.header("📦 Dodatki do oferty")
+    dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
+    wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name']) if st.checkbox(d['name'], value=False)]
+
+# --- GŁÓWNY PANEL ---
+st.title("🛡️ Generator Ofert ITS WRAP")
+col1, col2 = st.columns(2)
+
+with col1:
+    klient = st.text_input("Imię i Nazwisko Klienta")
+    nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
+    
+    # Wybór z Cennika v3
+    kategorie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
+    kategoria = st.selectbox("Kategoria", kategorie)
+    uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
+    pakiet = st.selectbox("Usługa", uslugi_kat)
+    
+    # Pobieranie ceny netto z cennika dla konkretnego segmentu
+    try:
+        wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
+        if not wiersz_ceny.empty:
+            cena_str = str(wiersz_ceny['Cena sprzedaży netto PLN'].values[0])
+            cena_str = cena_str.replace(' ', '').replace('\xa0', '')
+            if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
+            cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
+        else:
+            cena_domyslna = 0.0
+    except:
+        cena_domyslna = 0.0
 
     st.markdown("---")
-    dodatki_pliki = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
-    wybrane_dodatki = [d for d in sorted(dodatki_pliki, key=lambda x: x['name']) if st.checkbox(d['name'])]
+    st.write("💰 **Kalkulacja cenowa**")
+    
+    cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
+    rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
+    cena_koncowa = cena_manual - rabat
+    
+    st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
 
-# --- UI GŁÓWNE ---
-st.title("🛡️ Generator Ofert ITS WRAP v3")
-t1, t2 = st.tabs(["📄 Nowa Oferta", "🗄️ Rejestr"])
+with col2:
+    if 'ai_img' in st.session_state:
+        st.image(st.session_state['ai_img'], use_container_width=True)
+    else:
+        st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
-with t1:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Klient")
-        klient, nip = st.text_input("Imię i Nazwisko / Firma"), st.text_input("NIP")
-        nr_o = st.text_input("Numer oferty", value=generuj_numer_oferty())
-        
-        st.markdown("---")
-        st.subheader("Usługa")
-        kat_list = df_cennik['Kategoria'].dropna().unique().tolist()
-        wybrana_kat = st.selectbox("Kategoria", [k for k in kat_list if k])
-        usl_list = df_cennik[df_cennik['Kategoria'] == wybrana_kat]['Usługa'].dropna().unique().tolist()
-        wybrany_pakiet = st.selectbox("Pakiet", [u for u in usl_list if u])
-        
-        cena_bazowa = pobierz_cene_uslugi(wybrana_kat, wybrany_pakiet, segment_final)
-        cena_manual = st.number_input("Cena netto (PLN)", value=cena_bazowa)
-        rabat = st.number_input("Rabat (PLN)", value=0.0)
-        st.info(f"**Do zapłaty: {cena_manual - rabat:,.2f} zł netto**")
+# --- GENEROWANIE OFERTY ---
+if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
+    if 'ai_img' not in st.session_state:
+        st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
+    else:
+        with st.spinner("Składam profesjonalny PDF..."):
+            writer = PdfWriter()
+            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
+            
+            dane_handlowca = HANDLOWCY[wybrany_handlowiec]
+            wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
 
-    with c2:
-        if 'ai_img' in st.session_state: st.image(st.session_state['ai_img'], use_container_width=True)
-        else: st.info("Podgląd AI pojawi się tutaj.")
+            # Formaty walutowe
+            cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
+            
+            # MAGIA CENY KATALOGOWEJ: Jeśli rabat wynosi 0, cena katalogowa zostaje pusta.
+            if rabat > 0:
+                cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
+            else:
+                cena_katalogowa_str = ""
 
-    if st.button("🔥 GENERUJ PDF"):
-        if 'ai_img' not in st.session_state: st.error("Najpierw wygeneruj zdjęcie AI!")
-        else:
-            with st.spinner("Składanie PDF..."):
-                writer = PdfWriter()
-                foil_text = f"{f_color} (na lakier: {paint_color})" if paint_color else f_color
-                d_h = HANDLOWCY[wybrany_handlowiec]
-                wstep = generate_ai_intro_text(klient, final_brand, final_model, wybrany_pakiet, foil_text, wybrany_handlowiec, d_h["stanowisko"])
+            replacements = {
+                "{{KLIENT}}": klient, 
+                "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
+                "{{RODZAJ_FOLII}}": final_foil_text, 
+                "{{USLUGA_NAZWA}}": pakiet,
+                "{{NR_OFERTY}}": nr_o,
+                "{{CENA_KATALOG}}": cena_katalogowa_str,
+                "{{CENA_KONCOWA}}": cena_koncowa_str,
+                "{{WSTEP_AI}}": wygenerowany_wstep,
+                "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
+                "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
+                "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"]
+            }
 
-                reps = {
-                    "{{KLIENT}}": klient, "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
-                    "{{RODZAJ_FOLII}}": foil_text, "{{USLUGA_NAZWA}}": wybrany_pakiet,
-                    "{{NR_OFERTY}}": nr_o, "{{CENA_KONCOWA}}": f"{cena_manual - rabat:,.2f} zł",
-                    "{{WSTEP_AI}}": wstep, "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
-                    "{{HANDLOWIEC_TEL}}": d_h["telefon"], "{{HANDLOWIEC_EMAIL}}": d_h["email"]
-                }
-
-                okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
-                wstep_s = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
-                
-                # Logika wyboru slajdu 2 (Produktu)
-                p_id = None
-                if "reklam" in wybrany_pakiet.lower(): p_id = next((f for f in pliki_na_dysku if 'reklama' in f['name'].lower()), None)
-                elif "3M" in f_brand: p_id = next((f for f in pliki_na_dysku if '3m' in f['name'].lower()), None)
-                elif "Stealth" in f_color: p_id = next((f for f in pliki_na_dysku if 'stealth' in f['name'].lower()), None)
-                else: p_id = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
-
+            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
+            wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
+            
+            produkt = None
+            if "reklam" in pakiet.lower():
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
+            elif f_brand == "3M 2080 Series":
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and '3m' in f['name'].lower() and 'kolor' in f['name'].lower()), None)
+            elif "Ultimate" in f_color: 
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
+            elif "Stealth" in f_color: 
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'stealth' in f['name'].lower()), None)
+            elif "Color" in f_cat: 
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
+            
+            if not produkt: 
+                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+            
+            if rabat > 0: 
+                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
+            else: 
+                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
+            
+            if not zakres: 
                 zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
-                koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-                seq = [okladka, wstep_s, p_id, zakres] + wybrane_dodatki + [koniec]
-                for f_inf in [x for x in seq if x]:
-                    prs = Presentation(download_file(service, f_inf['id']))
-                    for slide in prs.slides:
-                        for shape in slide.shapes:
-                            if f_inf['name'].startswith('1_') and "{{FOTO_AUTA}}" in (shape.name or ""):
-                                slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
-                            if shape.has_text_frame:
-                                for p in shape.text_frame.paragraphs:
-                                    for run in p.runs:
-                                        for k, v in reps.items():
-                                            if k in run.text: run.text = run.text.replace(k, str(v))
-                    tmp = f"tmp_{f_inf['id']}.pptx"
-                    prs.save(tmp)
-                    pdf = pptx_to_pdf(tmp)
-                    if pdf: writer.append(pdf); os.remove(tmp); os.remove(pdf)
+            koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
 
-                out = io.BytesIO(); writer.write(out); out.seek(0)
-                sheet_r.append_row([datetime.now().strftime("%Y-%m-%d"), nr_o, wybrany_handlowiec, klient, nip, f"{final_brand} {final_model}", wybrany_pakiet, foil_text, f"{cena_manual-rabat} zł", "Wysłana"])
-                st.balloons()
-                st.download_button("📥 POBIERZ PDF", out, f"Oferta_{nr_o.replace('/','_')}.pdf")
+            seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
+            seq = [f for f in seq if f]
 
-with t2:
-    st.dataframe(df_rejestr.tail(20), use_container_width=True)
+            for f_info in seq:
+                prs = Presentation(download_file(service, f_info['id']))
+                for slide in prs.slides:
+                    # Dokładnie ta sama działająca pętla od zdjęć, którą miałeś
+                    if f_info['name'].startswith('1_'):
+                        for shape in list(slide.shapes):
+                            if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
+                                pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
+                                slide.shapes._spTree.remove(pic._element)
+                                slide.shapes._spTree.insert(2, pic._element)
+                                shape._element.getparent().remove(shape._element)
+
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            for p in shape.text_frame.paragraphs:
+                                for run in p.runs:
+                                    for k, v in replacements.items():
+                                        if k in run.text: 
+                                            run.text = run.text.replace(k, str(v))
+                                            try:
+                                                run.font.name = 'URW DIN'
+                                            except: pass
+
+                tmp_p = f"tmp_{f_info['id']}.pptx"
+                prs.save(tmp_p)
+                pdf = pptx_to_pdf(tmp_p)
+                if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
+
+            final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+            
+            # --- ZAPIS DO BAZY ---
+            if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa):
+                st.success("✅ Oferta zapisana w systemie CRM!")
+                
+            st.balloons()
+            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
