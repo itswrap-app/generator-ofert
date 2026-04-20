@@ -161,7 +161,7 @@ def pptx_to_pdf(input_path):
         return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
 
-# --- ZAPIS DO REJESTRU (v3) ---
+# --- ZAPIS DO REJESTRU ---
 def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena):
     try:
         sheet_rejestr = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
@@ -184,7 +184,7 @@ client = gspread.authorize(creds)
 results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
-# POBIERANIE CENNIKA v3 (z czyszczeniem enterów w nagłówkach)
+# POBIERANIE CENNIKA v3
 try:
     sheet_cennik = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Cennik usług")
     naglowki = [c.replace('\n', ' ').replace('\r', '').strip() for c in sheet_cennik.get_all_values()[0]]
@@ -254,13 +254,11 @@ with col1:
     klient = st.text_input("Imię i Nazwisko Klienta")
     nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
     
-    # Wybór z Cennika v3
     kategorie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
     kategoria = st.selectbox("Kategoria", kategorie)
     uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
     pakiet = st.selectbox("Usługa", uslugi_kat)
     
-    # Pobieranie ceny netto z cennika dla konkretnego segmentu
     try:
         wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
         if not wiersz_ceny.empty:
@@ -300,10 +298,9 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             dane_handlowca = HANDLOWCY[wybrany_handlowiec]
             wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
 
-            # Formaty walutowe
             cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
             
-            # MAGIA CENY KATALOGOWEJ: Jeśli rabat wynosi 0, cena katalogowa zostaje pusta.
+            # Cena katalogowa jest uzupełniana tylko, jeśli wpisano rabat. Inaczej zostawiamy puste miejsce.
             if rabat > 0:
                 cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
             else:
@@ -357,7 +354,6 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
             for f_info in seq:
                 prs = Presentation(download_file(service, f_info['id']))
                 for slide in prs.slides:
-                    # Dokładnie ta sama działająca pętla od zdjęć, którą miałeś
                     if f_info['name'].startswith('1_'):
                         for shape in list(slide.shapes):
                             if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
@@ -369,13 +365,22 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
                     for shape in slide.shapes:
                         if shape.has_text_frame:
                             for p in shape.text_frame.paragraphs:
-                                for run in p.runs:
-                                    for k, v in replacements.items():
-                                        if k in run.text: 
-                                            run.text = run.text.replace(k, str(v))
-                                            try:
-                                                run.font.name = 'URW DIN'
-                                            except: pass
+                                # Sklejanie akapitu w jedną całość, aby ominąć błąd uciętych zmiennych PowerPointa
+                                p_text = "".join(run.text for run in p.runs)
+                                for k, v in replacements.items():
+                                    if k in p_text:
+                                        replaced = False
+                                        for run in p.runs:
+                                            if k in run.text:
+                                                run.text = run.text.replace(k, str(v))
+                                                replaced = True
+                                        
+                                        # Jeśli PowerPoint rozbił zmienną na wiele kawałków
+                                        if not replaced:
+                                            p.runs[0].text = p_text.replace(k, str(v))
+                                            for run in p.runs[1:]:
+                                                run.text = ""
+                                        p_text = "".join(run.text for run in p.runs)
 
                 tmp_p = f"tmp_{f_info['id']}.pptx"
                 prs.save(tmp_p)
@@ -384,7 +389,6 @@ if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
 
             final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
             
-            # --- ZAPIS DO BAZY ---
             if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa):
                 st.success("✅ Oferta zapisana w systemie CRM!")
                 
