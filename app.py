@@ -161,7 +161,6 @@ def pptx_to_pdf(input_path):
         return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
 
-# --- ZAPIS DO REJESTRU ---
 def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena):
     try:
         sheet_rejestr = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
@@ -172,6 +171,29 @@ def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena)
     except Exception as e:
         st.error(f"Nie udało się zapisać do bazy (Rejestr): {e}")
         return False
+
+def replace_text_in_shape(shape, replacements):
+    """Rekurencyjnie wyszukuje i podmienia tagi tekstowe, wchodząc również w tabele i grupy obiektów."""
+    if hasattr(shape, "has_text_frame") and shape.has_text_frame:
+        for p in shape.text_frame.paragraphs:
+            p_text = "".join(run.text for run in p.runs)
+            original_text = p_text
+            for k, v in replacements.items():
+                if k in p_text:
+                    p_text = p_text.replace(k, str(v))
+            if p_text != original_text and len(p.runs) > 0:
+                p.runs[0].text = p_text
+                for run in p.runs[1:]:
+                    run.text = ""
+                    
+    if hasattr(shape, "has_table") and shape.has_table:
+        for row in shape.table.rows:
+            for cell in row.cells:
+                replace_text_in_shape(cell, replacements)
+                
+    if shape.shape_type == 6: # msoGroup
+        for subshape in shape.shapes:
+            replace_text_in_shape(subshape, replacements)
 
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
@@ -246,151 +268,156 @@ with st.sidebar:
     dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
     wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name']) if st.checkbox(d['name'], value=False)]
 
-# --- GŁÓWNY PANEL ---
-st.title("🛡️ Generator Ofert ITS WRAP")
-col1, col2 = st.columns(2)
+# ZAKŁADKI W GŁÓWNYM PANELU
+tab_kreator, tab_rejestr = st.tabs(["⚙️ Kreator Ofert", "📋 Ewidencja (Rejestr)"])
 
-with col1:
-    klient = st.text_input("Imię i Nazwisko Klienta")
-    nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
-    
-    kategorie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
-    kategoria = st.selectbox("Kategoria", kategorie)
-    uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
-    pakiet = st.selectbox("Usługa", uslugi_kat)
-    
-    try:
-        wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
-        if not wiersz_ceny.empty:
-            cena_str = str(wiersz_ceny['Cena sprzedaży netto PLN'].values[0])
-            cena_str = cena_str.replace(' ', '').replace('\xa0', '')
-            if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
-            cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
-        else:
-            cena_domyslna = 0.0
-    except:
-        cena_domyslna = 0.0
+with tab_kreator:
+    st.title("🛡️ Generator Ofert ITS WRAP")
+    col1, col2 = st.columns(2)
 
-    st.markdown("---")
-    st.write("💰 **Kalkulacja cenowa**")
-    
-    cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
-    rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
-    cena_koncowa = cena_manual - rabat
-    
-    st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
-
-with col2:
-    if 'ai_img' in st.session_state:
-        st.image(st.session_state['ai_img'], use_container_width=True)
-    else:
-        st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
-
-# --- GENEROWANIE OFERTY ---
-if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
-    if 'ai_img' not in st.session_state:
-        st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
-    else:
-        with st.spinner("Składam profesjonalny PDF..."):
-            writer = PdfWriter()
-            final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
-            
-            dane_handlowca = HANDLOWCY[wybrany_handlowiec]
-            wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
-
-            cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
-            
-            # Cena katalogowa jest uzupełniana tylko, jeśli wpisano rabat. Inaczej zostawiamy puste miejsce.
-            if rabat > 0:
-                cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
+    with col1:
+        klient = st.text_input("Imię i Nazwisko Klienta")
+        nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
+        
+        kategorie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
+        kategoria = st.selectbox("Kategoria", kategorie)
+        uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
+        pakiet = st.selectbox("Usługa", uslugi_kat)
+        
+        try:
+            wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
+            if not wiersz_ceny.empty:
+                cena_str = str(wiersz_ceny['Cena sprzedaży netto PLN'].values[0])
+                cena_str = cena_str.replace(' ', '').replace('\xa0', '')
+                if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
+                cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
             else:
-                cena_katalogowa_str = ""
+                cena_domyslna = 0.0
+        except:
+            cena_domyslna = 0.0
 
-            replacements = {
-                "{{KLIENT}}": klient, 
-                "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
-                "{{RODZAJ_FOLII}}": final_foil_text, 
-                "{{USLUGA_NAZWA}}": pakiet,
-                "{{NR_OFERTY}}": nr_o,
-                "{{CENA_KATALOG}}": cena_katalogowa_str,
-                "{{CENA_KONCOWA}}": cena_koncowa_str,
-                "{{WSTEP_AI}}": wygenerowany_wstep,
-                "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
-                "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
-                "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"]
-            }
+        st.markdown("---")
+        st.write("💰 **Kalkulacja cenowa**")
+        
+        cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
+        rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
+        cena_koncowa = cena_manual - rabat
+        
+        st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
 
-            okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
-            wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
-            
-            produkt = None
-            if "reklam" in pakiet.lower():
-                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
-            elif f_brand == "3M 2080 Series":
-                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and '3m' in f['name'].lower() and 'kolor' in f['name'].lower()), None)
-            elif "Ultimate" in f_color: 
-                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
-            elif "Stealth" in f_color: 
-                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'stealth' in f['name'].lower()), None)
-            elif "Color" in f_cat: 
-                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
-            
-            if not produkt: 
-                produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
-            
-            if rabat > 0: 
-                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
-            else: 
-                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
-            
-            if not zakres: 
-                zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
+    with col2:
+        if 'ai_img' in st.session_state:
+            st.image(st.session_state['ai_img'], use_container_width=True)
+        else:
+            st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
-            koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
-
-            seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
-            seq = [f for f in seq if f]
-
-            for f_info in seq:
-                prs = Presentation(download_file(service, f_info['id']))
-                for slide in prs.slides:
-                    if f_info['name'].startswith('1_'):
-                        for shape in list(slide.shapes):
-                            if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
-                                pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
-                                slide.shapes._spTree.remove(pic._element)
-                                slide.shapes._spTree.insert(2, pic._element)
-                                shape._element.getparent().remove(shape._element)
-
-                    for shape in slide.shapes:
-                        if shape.has_text_frame:
-                            for p in shape.text_frame.paragraphs:
-                                # Sklejanie akapitu w jedną całość, aby ominąć błąd uciętych zmiennych PowerPointa
-                                p_text = "".join(run.text for run in p.runs)
-                                for k, v in replacements.items():
-                                    if k in p_text:
-                                        replaced = False
-                                        for run in p.runs:
-                                            if k in run.text:
-                                                run.text = run.text.replace(k, str(v))
-                                                replaced = True
-                                        
-                                        # Jeśli PowerPoint rozbił zmienną na wiele kawałków
-                                        if not replaced:
-                                            p.runs[0].text = p_text.replace(k, str(v))
-                                            for run in p.runs[1:]:
-                                                run.text = ""
-                                        p_text = "".join(run.text for run in p.runs)
-
-                tmp_p = f"tmp_{f_info['id']}.pptx"
-                prs.save(tmp_p)
-                pdf = pptx_to_pdf(tmp_p)
-                if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
-
-            final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
-            
-            if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa):
-                st.success("✅ Oferta zapisana w systemie CRM!")
+    # --- GENEROWANIE OFERTY ---
+    if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
+        if 'ai_img' not in st.session_state:
+            st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
+        else:
+            with st.spinner("Składam profesjonalny PDF..."):
+                writer = PdfWriter()
+                final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
                 
-            st.balloons()
-            st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
+                dane_handlowca = HANDLOWCY[wybrany_handlowiec]
+                wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
+
+                cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
+                
+                # Niezależnie od wystąpienia rabatu podajemy cenę bazową. Dzięki temu zmienna {{CENA_KATALOG}} zawsze uzyska wartość.
+                cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
+
+                replacements = {
+                    "{{KLIENT}}": klient, 
+                    "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
+                    "{{RODZAJ_FOLII}}": final_foil_text, 
+                    "{{USLUGA_NAZWA}}": pakiet,
+                    "{{NR_OFERTY}}": nr_o,
+                    "{{CENA_KATALOG}}": cena_katalogowa_str,
+                    "{{CENA_KONCOWA}}": cena_koncowa_str,
+                    "{{WSTEP_AI}}": wygenerowany_wstep,
+                    "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
+                    "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
+                    "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"]
+                }
+
+                okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
+                wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
+                
+                produkt = None
+                if "reklam" in pakiet.lower():
+                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
+                elif f_brand == "3M 2080 Series":
+                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and '3m' in f['name'].lower() and 'kolor' in f['name'].lower()), None)
+                elif "Ultimate" in f_color: 
+                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
+                elif "Stealth" in f_color: 
+                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'stealth' in f['name'].lower()), None)
+                elif "Color" in f_cat: 
+                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
+                
+                if not produkt: 
+                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+                
+                if rabat > 0: 
+                    zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
+                else: 
+                    zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
+                
+                if not zakres: 
+                    zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
+
+                koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
+
+                seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
+                seq = [f for f in seq if f]
+
+                for f_info in seq:
+                    prs = Presentation(download_file(service, f_info['id']))
+                    for slide in prs.slides:
+                        if f_info['name'].startswith('1_'):
+                            for shape in list(slide.shapes):
+                                if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
+                                    pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
+                                    slide.shapes._spTree.remove(pic._element)
+                                    slide.shapes._spTree.insert(2, pic._element)
+                                    shape._element.getparent().remove(shape._element)
+
+                        for shape in slide.shapes:
+                            replace_text_in_shape(shape, replacements)
+
+                    tmp_p = f"tmp_{f_info['id']}.pptx"
+                    prs.save(tmp_p)
+                    pdf = pptx_to_pdf(tmp_p)
+                    if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
+
+                final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+                
+                if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa):
+                    st.success("✅ Oferta zapisana w systemie CRM!")
+                    
+                st.balloons()
+                st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
+
+with tab_rejestr:
+    st.header("📋 Ostatnio zapisane oferty")
+    try:
+        sheet_rejestr_view = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
+        dane_rejestru = sheet_rejestr_view.get_all_records()
+        if dane_rejestru:
+            df_rejestr = pd.DataFrame(dane_rejestru)
+            st.dataframe(df_rejestr, use_container_width=True)
+            
+            # Przycisk pobierania aktualnego zrzutu ewidencji do Excela/CSV na komputer
+            csv = df_rejestr.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="⬇️ Pobierz ewidencję jako CSV",
+                data=csv,
+                file_name=f"Rejestr_Ofert_ITSWRAP_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime='text/csv',
+            )
+        else:
+            st.info("Rejestr jest pusty lub arkusz nie zawiera jeszcze wpisów.")
+    except Exception as e:
+        st.warning(f"Brak możliwości wczytania rejestru lub rejestr nie jest skonfigurowany. Błąd: {e}")
