@@ -94,20 +94,27 @@ def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=No
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict?key={api_key}"
     
-    wzmocniony_prompt = f"{prompt} Highly detailed, exact same car shape and structure as the reference image, cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
-    
-    instance = {"prompt": wzmocniony_prompt}
-    
     if reference_image_bytes and reference_mime_type:
+        # Znacznik [1] jest obowiązkowy, aby połączyć wgrane zdjęcie z żądaniem.
+        wzmocniony_prompt = f"Generate an image of [1]. {prompt} Highly detailed, exact same car shape and structure as the reference image, cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
+        
         base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
-        instance["referenceImages"] = [
-            {
-                "referenceImage": {
-                    "bytesBase64Encoded": base64_image,
-                    "mimeType": reference_mime_type
+        instance = {
+            "prompt": wzmocniony_prompt,
+            "referenceImages": [
+                {
+                    "referenceId": 1,
+                    "referenceImage": {
+                        "bytesBase64Encoded": base64_image,
+                        "mimeType": reference_mime_type
+                    }
                 }
-            }
-        ]
+            ]
+        }
+    else:
+        # Zwykły prompt, gdy użytkownik nie wgrywa zdjęcia (korzysta z pamięci AI)
+        wzmocniony_prompt = f"{prompt} Highly detailed, cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
+        instance = {"prompt": wzmocniony_prompt}
 
     payload = {"instances": [instance], "parameters": {"sampleCount": 1}}
     
@@ -138,7 +145,6 @@ def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=No
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
     return out_fallback.getvalue()
-
 def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
