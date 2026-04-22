@@ -4,7 +4,7 @@ from pptx import Presentation
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io, os, subprocess, re, shutil, requests, base64
 from pypdf import PdfWriter
 from datetime import datetime
@@ -13,6 +13,7 @@ import random
 
 # --- NOWY LINK DO CENNIKA v3 ---
 LINK_DO_ARKUSZA = "https://docs.google.com/spreadsheets/d/1USF81hOinAP_vvz1QZuoNyRCT1ezJcXTDDB6RjuYtrY/edit"
+PARENT_FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
 
 # --- BAZA OPIEKUNÓW / HANDLOWCÓW ---
 HANDLOWCY = {
@@ -89,11 +90,24 @@ def install_fonts():
             if f.lower().endswith((".ttf", ".otf")): shutil.copy(os.path.join(font_src, f), font_dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
 
-def generate_ai_image(prompt):
+def generate_ai_image(prompt, reference_image_bytes=None):
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict?key={api_key}"
-    wzmocniony_prompt = f"{prompt} Highly detailed, precise factory body styling, sharp focus, 8k resolution."
-    payload = {"instances": [{"prompt": wzmocniony_prompt}], "parameters": {"sampleCount": 1}}
+    
+    wzmocniony_prompt = f"{prompt} Highly detailed, exact same car shape and structure as the reference image, cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
+    
+    instance = {"prompt": wzmocniony_prompt}
+    
+    if reference_image_bytes:
+        base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
+        instance["referenceImages"] = [
+            {
+                "referenceImage": {"bytesBase64Encoded": base64_image}
+            }
+        ]
+
+    payload = {"instances": [instance], "parameters": {"sampleCount": 1}}
+    
     try:
         response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
@@ -113,9 +127,10 @@ def generate_ai_image(prompt):
             img_cropped.save(out_bytes, format='PNG')
             return out_bytes.getvalue()
         else:
-            st.warning(f"Błąd generowania obrazu: {response.text}")
+            st.error(f"Odrzucenie zlecenia przez API Obrazów: {response.text}")
     except Exception as e:
-        pass
+        st.error(f"Wystąpił błąd komunikacji z modelem: {e}")
+        
     img_fallback = Image.new('RGB', (2100, 1870), color=(40, 40, 45))
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
@@ -161,11 +176,48 @@ def pptx_to_pdf(input_path):
         return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
 
-def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena):
+# --- OBSŁUGA GOOGLE DRIVE DLA OFERT ---
+def pobierz_lub_stworz_folder_oferty(service, parent_id):
+    query = f"'{parent_id}' in parents and name='Oferty' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    items = results.get('files', [])
+    
+    if not items:
+        file_metadata = {
+            'name': 'Oferty',
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [parent_id]
+        }
+        folder = service.files().create(body=file_metadata, fields='id').execute()
+        return folder.get('id')
+    return items[0].get('id')
+
+def wgraj_pdf_na_dysk(service, folder_id, file_name, file_bytes):
+    try:
+        file_metadata = {
+            'name': file_name,
+            'parents': [folder_id]
+        }
+        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='application/pdf', resumable=True)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+        
+        # Uprawnienia do odczytu dla wszystkich posiadających link
+        service.permissions().create(
+            fileId=file.get('id'),
+            body={'type': 'anyone', 'role': 'reader'}
+        ).execute()
+        
+        return file.get('webViewLink')
+    except Exception as e:
+        st.error(f"Błąd podczas zapisu pliku PDF na Google Drive: {e}")
+        return None
+
+# --- ZAPIS DO REJESTRU ---
+def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena, pdf_link):
     try:
         sheet_rejestr = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
         dzisiaj = datetime.now().strftime("%Y-%m-%d")
-        nowy_wiersz = [dzisiaj, nr_oferty, handlowiec, klient, auto, usluga, folia, f"{cena} zł", "Nowa"]
+        nowy_wiersz = [dzisiaj, nr_oferty, handlowiec, klient, auto, usluga, folia, f"{cena} zł", "Nowa", pdf_link]
         sheet_rejestr.append_row(nowy_wiersz)
         return True
     except Exception as e:
@@ -203,7 +255,7 @@ creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"],
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-results = service.files().list(q="'12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
+results = service.files().list(q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
 # POBIERANIE CENNIKA v3
@@ -250,16 +302,26 @@ with st.sidebar:
     if "Bezbarwne" in f_cat:
         paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
 
+    st.markdown("---")
+    st.title("📸 Wizualizacja")
+    
+    uploaded_files = st.file_uploader("Opcjonalnie: Wgraj zdjęcia poglądowe (np. nowej karoserii ze strony producenta)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
-        extra = f" {gen_code} generation," if gen_code else ""
+        extra = f" {gen_code}," if gen_code else ""
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact {year} factory body styling.{extra} Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}. High-end detailing garage, cinematic lighting."
+            prompt = f"Automotive studio photography of the newest {year} {final_brand} {final_model} ({body}). {extra} Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}."
         else:
-            prompt = f"Professional automotive studio photography of a {year} {final_brand} {final_model} ({body}). Exact {year} factory body styling.{extra} Wrapped in {f_brand} {f_color}. High-end detailing garage, cinematic lighting."
+            prompt = f"Automotive studio photography of the newest {year} {final_brand} {final_model} ({body}). {extra} Wrapped in {f_brand} {f_color}."
             
+        ref_image_bytes = None
+        if uploaded_files:
+            ref_image_bytes = uploaded_files[0].read()
+            st.info("Przetwarzam Twoje zdjęcie referencyjne...")
+
         with st.spinner("AI renderuje Twoje auto..."):
-            img_data = generate_ai_image(prompt)
+            img_data = generate_ai_image(prompt, ref_image_bytes)
             if img_data:
                 st.session_state['ai_img'] = img_data
                 
@@ -316,7 +378,7 @@ with tab_kreator:
         if 'ai_img' not in st.session_state:
             st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
         else:
-            with st.spinner("Składam profesjonalny PDF..."):
+            with st.spinner("Składam profesjonalny PDF i wgrywam na Dysk Google..."):
                 writer = PdfWriter()
                 final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
                 
@@ -324,8 +386,6 @@ with tab_kreator:
                 wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
 
                 cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
-                
-                # Niezależnie od wystąpienia rabatu podajemy cenę bazową. Dzięki temu zmienna {{CENA_KATALOG}} zawsze uzyska wartość.
                 cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
 
                 replacements = {
@@ -393,12 +453,19 @@ with tab_kreator:
                     if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
                 final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+                nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
                 
-                if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa):
-                    st.success("✅ Oferta zapisana w systemie CRM!")
+                # Odszukanie/Utworzenie folderu Oferty i wgranie pliku
+                folder_oferty_id = pobierz_lub_stworz_folder_oferty(service, PARENT_FOLDER_ID)
+                utworzony_link = wgraj_pdf_na_dysk(service, folder_oferty_id, nazwa_pliku_wyjsciowego, final_io.getvalue())
+                
+                link_do_zapisu = utworzony_link if utworzony_link else "Błąd uploadu"
+
+                if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu):
+                    st.success(f"✅ Oferta zapisana w systemie CRM! Plik został zachowany w folderze 'Oferty'.")
                     
                 st.balloons()
-                st.download_button("📥 POBIERZ OFERTĘ PDF", data=final_io, file_name=f"Oferta_{final_brand}_{final_model}.pdf")
+                st.download_button("📥 POBIERZ OFERTĘ PDF LOKALNIE", data=final_io, file_name=nazwa_pliku_wyjsciowego)
 
 with tab_rejestr:
     st.header("📋 Ostatnio zapisane oferty")
@@ -407,9 +474,22 @@ with tab_rejestr:
         dane_rejestru = sheet_rejestr_view.get_all_records()
         if dane_rejestru:
             df_rejestr = pd.DataFrame(dane_rejestru)
-            st.dataframe(df_rejestr, use_container_width=True)
             
-            # Przycisk pobierania aktualnego zrzutu ewidencji do Excela/CSV na komputer
+            # Formatyzacja kolumny, zakładając że kolumna nazywa się podobnie do tego co zostało wysłane.
+            # Ważne: w arkuszu "Rejestr" trzeba dopisać w rzędzie z nagłówkami nową kolumnę, np. "Link PDF".
+            nazwa_kolumny_link = df_rejestr.columns[-1] # domyślnie ostatnia dodana kolumna to link
+            
+            st.data_editor(
+                df_rejestr,
+                column_config={
+                    nazwa_kolumny_link: st.column_config.LinkColumn(
+                        "Plik PDF", help="Kliknij aby pobrać dokument ofertowy z dysku", display_text="Otwórz dokument"
+                    )
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
             csv = df_rejestr.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="⬇️ Pobierz ewidencję jako CSV",
@@ -420,4 +500,4 @@ with tab_rejestr:
         else:
             st.info("Rejestr jest pusty lub arkusz nie zawiera jeszcze wpisów.")
     except Exception as e:
-        st.warning(f"Brak możliwości wczytania rejestru lub rejestr nie jest skonfigurowany. Błąd: {e}")
+        st.warning(f"Brak możliwości wczytania rejestru. Pamiętaj, by w nagłówkach bazy (Arkusz 'Rejestr', 1 wiersz) dodać kolumnę na link do PDF. Błąd: {e}")
