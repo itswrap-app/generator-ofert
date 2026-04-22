@@ -320,33 +320,91 @@ def pptx_to_pdf(input_path):
     except: return None
 
 
-# --- OBSŁUGA GOOGLE DRIVE DLA OFERT ---
-def pobierz_lub_stworz_folder_oferty(service, parent_id):
-    query = f"'{parent_id}' in parents and name='Oferty' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
+# --- OBSŁUGA GOOGLE DRIVE DLA OFERT (OAuth - prywatne konto Google) ---
+# Service Accounts nie mają miejsca na Drive, więc do uploadu PDF-ów używamy
+# OAuth delegation - token odświeżający pozwala aplikacji działać w imieniu
+# prywatnego konta Google użytkownika (i zużywać jego limit 15GB).
+#
+# Konfiguracja: sekret [oauth_drive] w secrets.toml z client_id, client_secret,
+# refresh_token, token_uri (wygenerowane jednorazowo skryptem generuj_token.py).
+#
+# Service account (zmienna 'service') dalej obsługuje odczyt szablonów PPTX
+# i Google Sheets (rejestr, cennik) - bo tam problemu z miejscem nie ma.
+
+from google.oauth2.credentials import Credentials as OAuthCredentials
+
+@st.cache_resource
+def get_oauth_drive_service():
+    """Tworzy klienta Drive API działającego w imieniu prywatnego konta Google."""
+    try:
+        oauth_conf = st.secrets["oauth_drive"]
+        creds = OAuthCredentials(
+            token=None,  # brak - zostanie odświeżony automatycznie z refresh_token
+            refresh_token=oauth_conf["refresh_token"],
+            token_uri=oauth_conf["token_uri"],
+            client_id=oauth_conf["client_id"],
+            client_secret=oauth_conf["client_secret"],
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        return build('drive', 'v3', credentials=creds)
+    except KeyError:
+        st.error(
+            "Brak konfiguracji [oauth_drive] w secrets.toml. "
+            "Uruchom skrypt generuj_token.py lokalnie aby wygenerować refresh token."
+        )
+        return None
+    except Exception as e:
+        st.error(f"Błąd inicjalizacji OAuth Drive: {e}")
+        return None
+
+
+def pobierz_lub_stworz_folder_oferty_oauth(oauth_service):
+    """
+    Szuka folderu 'Oferty ITS WRAP' w korzeniu prywatnego Drive użytkownika.
+    Tworzy go jeśli nie istnieje.
+    
+    UWAGA: scope drive.file pozwala operować TYLKO na plikach/folderach
+    stworzonych przez tę aplikację - więc nie zobaczymy ewentualnego istniejącego
+    folderu 'Oferty' stworzonego ręcznie. Dlatego używamy własnej unikalnej nazwy.
+    """
+    folder_name = "Oferty ITS WRAP"
+    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    results = oauth_service.files().list(
+        q=query,
+        fields="files(id, name)",
+        spaces='drive'
+    ).execute()
     items = results.get('files', [])
     
     if not items:
         file_metadata = {
-            'name': 'Oferty',
-            'mimeType': 'application/vnd.google-apps.folder',
-            'parents': [parent_id]
+            'name': folder_name,
+            'mimeType': 'application/vnd.google-apps.folder'
         }
-        folder = service.files().create(body=file_metadata, fields='id').execute()
+        folder = oauth_service.files().create(
+            body=file_metadata,
+            fields='id'
+        ).execute()
         return folder.get('id')
     return items[0].get('id')
 
 
-def wgraj_pdf_na_dysk(service, folder_id, file_name, file_bytes):
+def wgraj_pdf_na_dysk(oauth_service, folder_id, file_name, file_bytes):
+    """Upload PDF na prywatny Drive właściciela konta OAuth."""
     try:
         file_metadata = {
             'name': file_name,
             'parents': [folder_id]
         }
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='application/pdf', resumable=True)
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+        file = oauth_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
         
-        service.permissions().create(
+        # Uprawnienia: każdy z linkiem może otworzyć (read-only)
+        oauth_service.permissions().create(
             fileId=file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
         ).execute()
@@ -401,7 +459,12 @@ creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"],
 service = build('drive', 'v3', credentials=creds)
 client = gspread.authorize(creds)
 
-results = service.files().list(q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
+results = service.files().list(
+    q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false",
+    fields="files(id, name)",
+    supportsAllDrives=True,
+    includeItemsFromAllDrives=True
+).execute()
 pliki_na_dysku = results.get('files', [])
 
 try:
@@ -664,8 +727,14 @@ with tab_kreator:
                 final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
                 nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
                 
-                folder_oferty_id = pobierz_lub_stworz_folder_oferty(service, PARENT_FOLDER_ID)
-                utworzony_link = wgraj_pdf_na_dysk(service, folder_oferty_id, nazwa_pliku_wyjsciowego, final_io.getvalue())
+                # Upload PDF na prywatny Drive użytkownika (OAuth, nie service account)
+                oauth_drive = get_oauth_drive_service()
+                if oauth_drive:
+                    folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
+                    utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, final_io.getvalue())
+                else:
+                    utworzony_link = None
+                    st.warning("OAuth Drive niedostępny - PDF nie został zapisany w chmurze. Pobierz plik lokalnie poniżej.")
                 
                 link_do_zapisu = utworzony_link if utworzony_link else "Błąd uploadu"
 
