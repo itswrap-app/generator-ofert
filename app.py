@@ -315,14 +315,19 @@ def _zbuduj_wolacz_po_polsku(klient):
 
 
 def _fallback_intro_text(wolacz, marka, czysta_folia, handlowiec_imie, handlowiec_stanowisko):
-    """Awaryjny szablon - używany gdy Gemini nie odpowie."""
+    """
+    Awaryjny szablon - używany gdy Gemini nie odpowie.
+    UWAGA: Tekst CELOWO jest oznaczony "[WSTĘP AWARYJNY]" żeby od razu było widać
+    że generacja AI padła i trzeba to wyłapać. W produkcji jeśli to się pokaże,
+    znaczy że jest problem z API Gemini.
+    """
     marka_txt = marka if marka and marka != "Inna marka..." else "samochodu"
     tresc = (
         f"{wolacz},\n\n"
-        f"Dziękuję za zaufanie i wybór naszej firmy. Komponując ofertę dla Twojego {marka_txt}, "
-        f"dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. "
-        f"Dzięki temu mogę zagwarantować najwyższą jakość ochrony samochodu na długie lata. "
-        f"Zapraszam do zapoznania się ze szczegółami przygotowanej wyceny."
+        f"[WSTĘP AWARYJNY - generacja AI niedostępna]\n"
+        f"Dziękuję za zaufanie przy wyborze zabezpieczenia Pańskiego {marka_txt}. "
+        f"Zastosowana folia {czysta_folia} zapewni skuteczną ochronę lakieru. "
+        f"Zapraszam do zapoznania się ze szczegółami wyceny."
     )
     return f"{tresc}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
 
@@ -379,7 +384,17 @@ PRZYKŁADY DOBREGO STYLU (do inspiracji, NIE kopiuj):
 Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
     
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
+        # Sprawdzenie czy klucz API istnieje w sekretach
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except KeyError:
+            st.error("🔑 Brak klucza GEMINI_API_KEY w secrets.toml - używam szablonu awaryjnego.")
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
+        if not api_key or len(str(api_key).strip()) < 10:
+            st.error("🔑 Klucz GEMINI_API_KEY jest pusty lub nieprawidłowy - używam szablonu awaryjnego.")
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
         url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         headers = {
             "Content-Type": "application/json",
@@ -396,16 +411,28 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         
         if response.status_code != 200:
-            st.warning(f"Gemini zwrócił błąd ({response.status_code}) - używam szablonu awaryjnego.")
+            st.error(
+                f"❌ Gemini API zwrócił błąd {response.status_code}.\n\n"
+                f"Pełna odpowiedź API:\n```\n{response.text[:1500]}\n```\n\n"
+                f"Używam szablonu awaryjnego."
+            )
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         data = response.json()
         
         if 'candidates' not in data or not data['candidates']:
+            st.error(
+                f"❌ Gemini nie zwrócił żadnego kandydata odpowiedzi.\n\n"
+                f"Pełna odpowiedź:\n```\n{str(data)[:1500]}\n```\n\n"
+                f"Używam szablonu awaryjnego."
+            )
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         candidate = data['candidates'][0]
-        if candidate.get('finishReason') in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST'):
+        finish_reason = candidate.get('finishReason')
+        
+        if finish_reason in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'RECITATION'):
+            st.error(f"❌ Gemini zablokował odpowiedź (powód: {finish_reason}) - używam szablonu awaryjnego.")
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         parts = candidate.get('content', {}).get('parts', [])
@@ -416,13 +443,21 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         
         wygenerowany_tekst = wygenerowany_tekst.strip()
         
+        if not wygenerowany_tekst:
+            st.error(
+                f"❌ Gemini zwrócił pustą odpowiedź (finishReason: {finish_reason}).\n\n"
+                f"Pełna odpowiedź kandydata:\n```\n{str(candidate)[:1500]}\n```\n\n"
+                f"Używam szablonu awaryjnego."
+            )
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
         # Sanity check - jeśli model zwrócił coś podejrzanie krótkiego, fallback
         if len(wygenerowany_tekst) < 80:
+            st.warning(f"⚠️ Gemini zwrócił zbyt krótki tekst ({len(wygenerowany_tekst)} znaków): '{wygenerowany_tekst}' - używam szablonu awaryjnego.")
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         # Obrona przed modelem, który mimo instrukcji sam doda podpis.
         # KLUCZOWE: szukamy fraz TYLKO na początku linii (po \n), nigdy w środku zdania.
-        # Inaczej fraza jak "za zainteresowanie naszą" byłaby obcięta na "nasz" itp.
         linie = wygenerowany_tekst.split('\n')
         frazy_podpisu_start_linii = [
             'z motoryzacyjnym', 'z poważaniem', 'z wyrazami',
@@ -438,14 +473,21 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         
         wygenerowany_tekst = '\n'.join(linie_wynikowe).strip()
         
-        # Drugi sanity check - po obcięciu podpisu może być za krótko
         if len(wygenerowany_tekst) < 80:
+            st.warning(f"⚠️ Po obcięciu podpisu tekst zbyt krótki ({len(wygenerowany_tekst)} znaków) - używam szablonu awaryjnego.")
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         return f"{wygenerowany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
         
+    except requests.exceptions.Timeout:
+        st.error("⏱️ Gemini - timeout po 30s - używam szablonu awaryjnego.")
+        return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
     except Exception as e:
-        st.warning(f"Błąd generacji wstępu AI ({e}) - używam szablonu awaryjnego.")
+        import traceback
+        st.error(
+            f"❌ Wyjątek podczas generacji wstępu:\n```\n{type(e).__name__}: {e}\n\n{traceback.format_exc()[:1000]}\n```\n\n"
+            f"Używam szablonu awaryjnego."
+        )
         return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
 
 
