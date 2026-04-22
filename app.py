@@ -93,55 +93,84 @@ def install_fonts():
 def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=None):
     api_key = st.secrets["GEMINI_API_KEY"]
     
+    # Używamy Gemini 2.5 Flash Image - model dedykowany do edycji i generacji obrazów
+    # Świetnie radzi sobie z zadaniem "zmień kolor tego auta zachowując wszystko inne"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
+    
+    parts = []
+    
     if reference_image_bytes and reference_mime_type:
-        # Twardy edytor Image-to-Image (I2I) wymusza strukturę zdjęcia oryginalnego
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-capability-editing:predict?key={api_key}"
+        # TRYB EDYCJI: mamy zdjęcie referencyjne (np. z konfiguratora producenta)
         base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
-        
-        instance = {
-            "image": {
-                "bytesBase64Encoded": base64_image,
-                "mimeType": reference_mime_type
-            },
-            # Polecamy modelowi wyłącznie zmianę koloru lakieru (wrap) bez psucia bryły.
-            "prompt": f"Change the car body wrap color to {prompt}. Keep the exact same car model, geometry, wheels, and background from the original image. High-end automotive studio lighting."
-        }
+        parts.append({
+            "inline_data": {
+                "mime_type": reference_mime_type,
+                "data": base64_image
+            }
+        })
+        instruction = (
+            f"Edit this car photograph: change ONLY the body paint/wrap color to {prompt}. "
+            f"CRITICAL: preserve the exact car model, body shape, wheels, headlights, windows, "
+            f"trim, badges, background, lighting and camera angle from the original image. "
+            f"Do not alter the car's geometry or proportions. Professional automotive photography quality."
+        )
+        parts.append({"text": instruction})
     else:
-        # Standardowy generator Text-to-Image, gdy nie wgrano zdjęcia
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
-        wzmocniony_prompt = f"Professional automotive photography of the newest {prompt}. Cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
-        instance = {"prompt": wzmocniony_prompt}
-
-    payload = {"instances": [instance], "parameters": {"sampleCount": 1}}
+        # TRYB GENERACJI: brak zdjęcia - prosimy o wygenerowanie od zera
+        # Wzmocniony prompt z naciskiem na aktualną generację
+        instruction = (
+            f"Professional automotive photography of {prompt}. "
+            f"Show the current/latest generation model as sold in showrooms today. "
+            f"Cinematic lighting in a high-end detailing studio, 3/4 front angle, "
+            f"8k resolution, sharp focus, modern photography, clean background."
+        )
+        parts.append({"text": instruction})
+    
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"]
+        }
+    }
     
     try:
-        response = requests.post(url, json=payload, timeout=60)
+        response = requests.post(url, json=payload, timeout=90)
         if response.status_code == 200:
-            img_data = base64.b64decode(response.json()['predictions'][0]['bytesBase64Encoded'])
-            img = Image.open(io.BytesIO(img_data))
-            w, h = img.size
-            target_ratio = 21.0 / 18.7
-            if w / h > target_ratio: 
-                new_w = int(h * target_ratio)
-                left = (w - new_w) / 2
-                img_cropped = img.crop((left, 0, left + new_w, h))
-            else: 
-                new_h = int(w / target_ratio)
-                top = (h - new_h) / 2
-                img_cropped = img.crop((0, top, w, top + new_h))
-            out_bytes = io.BytesIO()
-            img_cropped.save(out_bytes, format='PNG')
-            return out_bytes.getvalue()
+            data = response.json()
+            # Odpowiedź Gemini zawiera parts - szukamy tego z inline_data (obrazek)
+            for part in data['candidates'][0]['content']['parts']:
+                if 'inlineData' in part or 'inline_data' in part:
+                    inline = part.get('inlineData') or part.get('inline_data')
+                    img_data = base64.b64decode(inline['data'])
+                    img = Image.open(io.BytesIO(img_data))
+                    
+                    # Przycinanie do proporcji 21:18.7 jak wcześniej
+                    w, h = img.size
+                    target_ratio = 21.0 / 18.7
+                    if w / h > target_ratio:
+                        new_w = int(h * target_ratio)
+                        left = (w - new_w) / 2
+                        img_cropped = img.crop((left, 0, left + new_w, h))
+                    else:
+                        new_h = int(w / target_ratio)
+                        top = (h - new_h) / 2
+                        img_cropped = img.crop((0, top, w, top + new_h))
+                    
+                    out_bytes = io.BytesIO()
+                    img_cropped.save(out_bytes, format='PNG')
+                    return out_bytes.getvalue()
+            
+            st.error("API zwróciło odpowiedź bez obrazu. Treść: " + str(data)[:500])
         else:
-            st.error(f"Odrzucenie zlecenia przez API Obrazów: {response.text}")
+            st.error(f"Błąd API ({response.status_code}): {response.text[:500]}")
     except Exception as e:
-        st.error(f"Wystąpił błąd komunikacji z modelem: {e}")
-        
+        st.error(f"Błąd komunikacji z modelem: {e}")
+    
+    # Fallback
     img_fallback = Image.new('RGB', (2100, 1870), color=(40, 40, 45))
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
     return out_fallback.getvalue()
-
 def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
