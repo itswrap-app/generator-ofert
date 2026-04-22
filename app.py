@@ -277,32 +277,161 @@ def _fallback_image():
     return out_fallback.getvalue()
 
 
-def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
+def _zbuduj_wolacz_po_polsku(klient):
+    """
+    Zwraca poprawną formę wołacza po polsku ("Panie Piotrze", "Pani Anno", itp.).
+    Odporna na puste pole - wtedy zwraca "Szanowny Kliencie".
+    Ta logika leci przed AI bo Gemini słabo radzi sobie z polską deklinacją.
+    """
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
+    if not imie_surowe:
+        return "Szanowny Kliencie"
+    
+    imie = imie_surowe.title()
+    imie_lower = imie.lower()
+    
+    if imie_lower.endswith('a'):
+        return f"Pani {imie}"
+    
+    wyjatki = {
+        "piotr": "Piotrze", "paweł": "Pawle", "kacper": "Kacprze",
+        "marek": "Marku", "michał": "Michale", "donald": "Donaldzie",
+        "konrad": "Konradzie", "dawid": "Dawidzie"
+    }
+    if imie_lower in wyjatki:
+        return f"Panie {wyjatki[imie_lower]}"
+    
+    if imie_lower.endswith('d'):
+        return f"Panie {imie}zie"
+    if imie_lower.endswith(('k', 'g', 'ch', 'j', 'sz', 'cz', 'rz', 'l', 'c')):
+        if imie_lower.endswith('ek'):
+            return f"Panie {imie[:-2]}ku"
+        return f"Panie {imie}u"
+    if imie_lower.endswith(('n', 'm', 'b', 'w', 'f', 's', 'z', 't', 'p')):
+        return f"Panie {imie}ie"
+    if imie_lower.endswith('r'):
+        return f"Panie {imie}ze"
+    return f"Panie {imie}"
+
+
+def _fallback_intro_text(wolacz, marka, czysta_folia, handlowiec_imie, handlowiec_stanowisko):
+    """Awaryjny szablon - używany gdy Gemini nie odpowie."""
+    marka_txt = marka if marka and marka != "Inna marka..." else "samochodu"
+    tresc = (
+        f"{wolacz},\n\n"
+        f"Dziękuję za zaufanie i wybór naszej firmy. Komponując ofertę dla Twojego {marka_txt}, "
+        f"dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. "
+        f"Dzięki temu mogę zagwarantować najwyższą jakość ochrony samochodu na długie lata. "
+        f"Zapraszam do zapoznania się ze szczegółami przygotowanej wyceny."
+    )
+    return f"{tresc}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
+
+
+def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
+    """
+    Generuje spersonalizowany wstęp do oferty przez Gemini 2.5 Flash.
+    Ton: profesjonalny, ciepły. Długość: 3-4 zdania. Zawsze świeży tekst.
+    
+    W razie błędu API wraca do bezpiecznego szablonu fallback (oferta musi się
+    wygenerować ZAWSZE, nawet jeśli Gemini akurat nie działa).
+    """
+    wolacz = _zbuduj_wolacz_po_polsku(klient)
     czysta_folia = folia.split('(')[0].strip()
-    wolacz = "Szanowny Kliencie"
-    if imie_surowe:
-        imie = imie_surowe.title()
-        imie_lower = imie.lower()
-        if imie_lower.endswith('a'): wolacz = f"Pani {imie}"
-        else:
-            wyjatki = {"piotr": "Piotrze", "paweł": "Pawle", "kacper": "Kacprze", "marek": "Marku", "michał": "Michale", "donald": "Donaldzie", "konrad": "Konradzie", "dawid": "Dawidzie"}
-            if imie_lower in wyjatki: wolacz = f"Panie {wyjatki[imie_lower]}"
-            elif imie_lower.endswith('d'): wolacz = f"Panie {imie}zie"
-            elif imie_lower.endswith(('k', 'g', 'ch', 'j', 'sz', 'cz', 'rz', 'l', 'c')):
-                if imie_lower.endswith('ek'): wolacz = f"Panie {imie[:-2]}ku"
-                else: wolacz = f"Panie {imie}u"
-            elif imie_lower.endswith(('n', 'm', 'b', 'w', 'f', 's', 'z', 't', 'p')): wolacz = f"Panie {imie}ie"
-            elif imie_lower.endswith('r'): wolacz = f"Panie {imie}ze"
-            else: wolacz = f"Panie {imie}"
-            
-    marka = brand if brand != "Inna marka..." else ""
-    szablony = [
-        f"{wolacz},\n\nDziękuję za wybór naszej firmy. Komponując ofertę dla Twojego {marka}, dobraliśmy bezkompromisowe rozwiązanie, jakim jest folia {czysta_folia}. Dzięki temu mogę zagwarantować Tobie najwyższą jakość ochrony samochodu na długie lata. Serdecznie zapraszam do zapoznania się ze szczegółami przygotowanej wyceny.",
-        f"{wolacz},\n\nW ITS WRAP nie uznajemy kompromisów. Właśnie dlatego, tworząc tę wycenę dla Twojego {marka}, zdecydowałem się na zastosowanie niezawodnej folii {czysta_folia}. To inwestycja, która zapewni Ci spokój ducha i perfekcyjną prezencję auta na drodze. Zachęcam do zapoznania się ze szczegółami."
-    ]
-    wybrany_tekst = random.choice(szablony)
-    return f"{wybrany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
+    marka_model = f"{brand} {model}".strip() if brand and brand != "Inna marka..." else "samochodu"
+    
+    # Kontekst dla modelu - wszystko co może pomóc w personalizacji
+    kontekst = (
+        f"Autor wiadomości: {handlowiec_imie}, {handlowiec_stanowisko}\n"
+        f"Firma: ITS WRAP (premium detailing, folie ochronne PPF, oklejanie samochodów)\n"
+        f"Klient: {klient if klient else 'nieznany'}\n"
+        f"Samochód klienta: {marka_model}\n"
+        f"Zamówiona usługa: {pakiet}\n"
+        f"Wybrana folia: {czysta_folia}"
+    )
+    
+    prompt = f"""Napisz krótki, spersonalizowany wstęp do oferty handlowej od specjalisty detailingu do klienta.
+
+KONTEKST:
+{kontekst}
+
+WYMAGANIA TECHNICZNE:
+- Zacznij dokładnie od: "{wolacz},"
+- Potem pusta linia, potem treść główna.
+- Treść: DOKŁADNIE 3-4 zdania, nie więcej.
+- NIE dodawaj podpisu, nagłówka ani formuły pożegnalnej - podpis zostanie dodany automatycznie.
+- Odpowiedz WYŁĄCZNIE treścią wiadomości, bez żadnych komentarzy, bez markdownu, bez "oto twoja wiadomość".
+
+WYMAGANIA TREŚCIOWE:
+- Ton: profesjonalny, ciepły, bez nachalnej sprzedaży.
+- Wspomnij konkretnie markę/model auta klienta.
+- Wspomnij konkretnie nazwę folii ({czysta_folia}) i krótko uzasadnij dlaczego to dobry wybór (1 korzyść).
+- Używaj formy "Pan/Pani" (ty kolumnowe), nigdy nie przechodź na "ty".
+- Unikaj sloganów typu "bezkompromisowe rozwiązanie", "pasja", "najwyższa jakość na długie lata" - to zużyte frazy.
+- Brzmij jak człowiek, który naprawdę zna się na autach i zależy mu na tym konkretnym kliencie.
+- NIE używaj emoji.
+
+Napisz teraz wstęp:"""
+    
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key
+        }
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.9,  # wysoka -> za każdym razem świeży, unikalny tekst
+                "maxOutputTokens": 400
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        if response.status_code != 200:
+            st.warning(f"Gemini zwrócił błąd ({response.status_code}) - używam szablonu awaryjnego.")
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
+        data = response.json()
+        
+        if 'candidates' not in data or not data['candidates']:
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
+        candidate = data['candidates'][0]
+        if candidate.get('finishReason') in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST'):
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
+        parts = candidate.get('content', {}).get('parts', [])
+        wygenerowany_tekst = ""
+        for part in parts:
+            if part.get('text'):
+                wygenerowany_tekst += part['text']
+        
+        wygenerowany_tekst = wygenerowany_tekst.strip()
+        
+        # Sanity check - jeśli model zwrócił coś podejrzanie krótkiego, fallback
+        if len(wygenerowany_tekst) < 50:
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
+        # Obrona przed modelem który mimo instrukcji doda swój podpis -
+        # obcinamy wszystko od pierwszego "Z poważaniem", "Z wyrazami", "Pozdrawiam" itp.
+        frazy_podpisu = [
+            "z motoryzacyjnym", "z poważaniem", "z wyrazami", "pozdrawiam",
+            "serdecznie pozdr", "łączę pozdr", "z uszanowaniem"
+        ]
+        dolny_tekst = wygenerowany_tekst.lower()
+        for fraza in frazy_podpisu:
+            idx = dolny_tekst.find(fraza)
+            if idx != -1:
+                wygenerowany_tekst = wygenerowany_tekst[:idx].rstrip()
+                break
+        
+        return f"{wygenerowany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
+        
+    except Exception as e:
+        st.warning(f"Błąd generacji wstępu AI ({e}) - używam szablonu awaryjnego.")
+        return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
 
 
 def download_file(service, file_id):
