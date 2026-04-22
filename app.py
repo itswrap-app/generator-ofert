@@ -92,28 +92,24 @@ def install_fonts():
 
 def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=None):
     api_key = st.secrets["GEMINI_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict?key={api_key}"
     
     if reference_image_bytes and reference_mime_type:
-        # Znacznik [1] jest obowiązkowy, aby połączyć wgrane zdjęcie z żądaniem.
-        wzmocniony_prompt = f"Generate an image of [1]. {prompt} Highly detailed, exact same car shape and structure as the reference image, cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
-        
+        # Twardy edytor Image-to-Image (I2I) wymusza strukturę zdjęcia oryginalnego
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-capability-editing:predict?key={api_key}"
         base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
+        
         instance = {
-            "prompt": wzmocniony_prompt,
-            "referenceImages": [
-                {
-                    "referenceId": 1,
-                    "referenceImage": {
-                        "bytesBase64Encoded": base64_image,
-                        "mimeType": reference_mime_type
-                    }
-                }
-            ]
+            "image": {
+                "bytesBase64Encoded": base64_image,
+                "mimeType": reference_mime_type
+            },
+            # Polecamy modelowi wyłącznie zmianę koloru lakieru (wrap) bez psucia bryły.
+            "prompt": f"Change the car body wrap color to {prompt}. Keep the exact same car model, geometry, wheels, and background from the original image. High-end automotive studio lighting."
         }
     else:
-        # Zwykły prompt, gdy użytkownik nie wgrywa zdjęcia (korzysta z pamięci AI)
-        wzmocniony_prompt = f"{prompt} Highly detailed, cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
+        # Standardowy generator Text-to-Image, gdy nie wgrano zdjęcia
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
+        wzmocniony_prompt = f"Professional automotive photography of the newest {prompt}. Cinematic lighting in a high-end detailing garage, 8k resolution, modern photography."
         instance = {"prompt": wzmocniony_prompt}
 
     payload = {"instances": [instance], "parameters": {"sampleCount": 1}}
@@ -145,6 +141,7 @@ def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=No
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
     return out_fallback.getvalue()
+
 def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
@@ -320,9 +317,12 @@ with st.sidebar:
         extra = f" {gen_code}," if gen_code else ""
         if "Bezbarwne" in f_cat:
             finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            prompt = f"Automotive studio photography of the newest {year} {final_brand} {final_model} ({body}). {extra} Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}."
+            # Zmieniony prompt, budowany w zależności od dostępności zdjęcia, skupiający się na kolorze
+            prompt_color = f"clear PPF giving it a {finish}"
+            prompt_full = f"{year} {final_brand} {final_model} ({body}). {extra} Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}."
         else:
-            prompt = f"Automotive studio photography of the newest {year} {final_brand} {final_model} ({body}). {extra} Wrapped in {f_brand} {f_color}."
+            prompt_color = f"{f_brand} {f_color} finish"
+            prompt_full = f"{year} {final_brand} {final_model} ({body}). {extra} Wrapped in {f_brand} {f_color}."
             
         ref_image_bytes = None
         ref_mime_type = None
@@ -330,10 +330,12 @@ with st.sidebar:
         if uploaded_files:
             ref_image_bytes = uploaded_files[0].read()
             ref_mime_type = uploaded_files[0].type
-            st.info("Przetwarzam Twoje zdjęcie referencyjne...")
-
+            st.info("Przetwarzam Twoje zdjęcie referencyjne (ZMIANA KOLORU)...")
+            
         with st.spinner("AI renderuje Twoje auto..."):
-            img_data = generate_ai_image(prompt, ref_image_bytes, ref_mime_type)
+            # Jeśli jest zdjęcie - przekazujemy sam kolor (edycja). Jeśli nie - pełny opis (generacja).
+            active_prompt = prompt_color if ref_image_bytes else prompt_full
+            img_data = generate_ai_image(active_prompt, ref_image_bytes, ref_mime_type)
             if img_data:
                 st.session_state['ai_img'] = img_data
                 
