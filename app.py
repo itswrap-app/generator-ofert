@@ -81,6 +81,20 @@ FOIL_GROUPS = {
     }
 }
 
+# ==========================================================================
+# OPIS SCENY - CIEMNY GARAŻ Z OŚWIETLENIEM LED
+# Jedno miejsce definicji żeby łatwo edytować styl wszystkich wizualizacji
+# ==========================================================================
+SCENE_DESCRIPTION = (
+    "The car is photographed inside a completely dark modern detailing garage. "
+    "Pitch black walls, black polished concrete floor with subtle reflections of the car body. "
+    "The only light sources are modern cool-white LED strip lights integrated into the ceiling and along the floor edges, "
+    "creating dramatic rim lighting on the car's silhouette and sharp highlights on the body panels. "
+    "No other objects, no tools, no people, no text, no windows, no doors visible - only the car in pure darkness with LED lighting. "
+    "Shot with professional automotive photography technique: 3/4 front angle, 35mm lens, cinematic composition, "
+    "ultra sharp focus on the car, 8k resolution, photorealistic."
+)
+
 # --- FUNKCJE SYSTEMOWE ---
 def install_fonts():
     font_src, font_dst = "fonts", os.path.expanduser("~/.local/share/fonts")
@@ -90,87 +104,179 @@ def install_fonts():
             if f.lower().endswith((".ttf", ".otf")): shutil.copy(os.path.join(font_src, f), font_dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
 
-def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=None):
+
+def _crop_to_target_ratio(img_bytes):
+    """Przycina obraz do proporcji 21:18.7 (jak w oryginalnej aplikacji)."""
+    img = Image.open(io.BytesIO(img_bytes))
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    w, h = img.size
+    target_ratio = 21.0 / 18.7
+    if w / h > target_ratio:
+        new_w = int(h * target_ratio)
+        left = (w - new_w) / 2
+        img_cropped = img.crop((left, 0, left + new_w, h))
+    else:
+        new_h = int(w / target_ratio)
+        top = (h - new_h) / 2
+        img_cropped = img.crop((0, top, w, top + new_h))
+    out_bytes = io.BytesIO()
+    img_cropped.save(out_bytes, format='PNG')
+    return out_bytes.getvalue()
+
+
+def generate_ai_image(car_description, color_description, reference_images=None):
+    """
+    Generuje wizualizację auta przez Gemini 2.5 Flash Image (Nano Banana).
+    
+    car_description: opis auta (marka, model, rocznik, nadwozie) - dla trybu text-to-image
+    color_description: opis docelowego koloru/folii
+    reference_images: lista tupli [(bytes, mime_type), ...] - zdjęcia referencyjne auta
+    
+    Gdy przekazane są reference_images:
+      - Model TRAKTUJE je jako referencje geometrii/proporcji tego samego auta
+      - Zachowuje bryłę, zmienia TYLKO kolor karoserii
+      - Scenę zastępuje ciemnym garażem z LED
+    
+    Gdy NIE ma referencji:
+      - Model generuje auto od zera na podstawie opisu
+      - Scena: ciemny garaż z LED
+    """
     api_key = st.secrets["GEMINI_API_KEY"]
     
-    # Używamy Gemini 2.5 Flash Image - model dedykowany do edycji i generacji obrazów
-    # Świetnie radzi sobie z zadaniem "zmień kolor tego auta zachowując wszystko inne"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
+    # Poprawny endpoint Gemini 2.5 Flash Image
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
     
     parts = []
     
-    if reference_image_bytes and reference_mime_type:
-        # TRYB EDYCJI: mamy zdjęcie referencyjne (np. z konfiguratora producenta)
-        base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
-        parts.append({
-            "inline_data": {
-                "mime_type": reference_mime_type,
-                "data": base64_image
-            }
-        })
-        instruction = (
-            f"Edit this car photograph: change ONLY the body paint/wrap color to {prompt}. "
-            f"CRITICAL: preserve the exact car model, body shape, wheels, headlights, windows, "
-            f"trim, badges, background, lighting and camera angle from the original image. "
-            f"Do not alter the car's geometry or proportions. Professional automotive photography quality."
+    if reference_images and len(reference_images) > 0:
+        # TRYB EDYCJI I2I - mamy zdjęcia referencyjne
+        # KLUCZOWE: jawnie mówimy modelowi że to wszystkie zdjęcia tego SAMEGO auta
+        # (różne ujęcia), a on ma wygenerować JEDNO nowe ujęcie w garażu z tym autem.
+        # Inaczej Nano Banana próbuje scalać zdjęcia jak fusion.
+        
+        count = len(reference_images)
+        if count == 1:
+            ref_instruction = (
+                "The attached image is a reference photograph of the EXACT car model I want to visualize. "
+                "Your task: render this SAME car (identical body shape, identical headlights, identical wheels, "
+                "identical proportions, identical generation/year) but place it in a new scene and change its color."
+            )
+        else:
+            ref_instruction = (
+                f"The {count} attached images are ALL reference photographs of the SAME car model taken from different angles. "
+                "Use them TOGETHER to understand the exact 3D geometry, body shape, and design details of this car. "
+                "Your task: render this EXACT same car model (identical generation, identical body shape, identical headlights, "
+                "identical wheels, identical proportions) as ONE NEW photograph in a new scene with a new color. "
+                "Do NOT try to merge or combine the images into a collage. Treat them as 3D reference of one single car."
+            )
+        
+        full_prompt = (
+            f"{ref_instruction}\n\n"
+            f"NEW SCENE AND COLOR REQUIREMENTS:\n"
+            f"- Car body wrap/paint color: {color_description}\n"
+            f"- Scene: {SCENE_DESCRIPTION}\n\n"
+            f"CRITICAL RULES:\n"
+            f"- Preserve the EXACT car model from the reference(s) - same generation, same body, same face, same wheels\n"
+            f"- Only change: the body color and the environment around the car\n"
+            f"- Do NOT modify the car's geometry, proportions, or design details\n"
+            f"- Output: ONE single photograph of the car in the described dark garage with LED lighting\n"
+            f"- Framing: 3/4 front view, car centered, full body visible"
         )
-        parts.append({"text": instruction})
+        
+        # Prompt tekstowy NAJPIERW
+        parts.append({"text": full_prompt})
+        
+        # Potem wszystkie zdjęcia referencyjne
+        for img_bytes, mime_type in reference_images:
+            base64_image = base64.b64encode(img_bytes).decode('utf-8')
+            parts.append({
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64_image
+                }
+            })
     else:
-        # TRYB GENERACJI: brak zdjęcia - prosimy o wygenerowanie od zera
-        # Wzmocniony prompt z naciskiem na aktualną generację
-        instruction = (
-            f"Professional automotive photography of {prompt}. "
-            f"Show the current/latest generation model as sold in showrooms today. "
-            f"Cinematic lighting in a high-end detailing studio, 3/4 front angle, "
-            f"8k resolution, sharp focus, modern photography, clean background."
+        # TRYB GENERACJI od zera - brak referencji
+        # Wzmocniony prompt aby wymusić aktualną generację modelu
+        full_prompt = (
+            f"Generate a photorealistic image of the following car:\n"
+            f"{car_description}\n\n"
+            f"Make sure this is the CURRENT generation of this model as sold in showrooms today - "
+            f"the latest facelift or newest generation available in 2025/2026, NOT older generations. "
+            f"If uncertain about the newest generation, prefer showing a generic modern body style "
+            f"matching the described segment rather than an outdated specific model.\n\n"
+            f"Color: the car's body is wrapped/painted in {color_description}.\n\n"
+            f"Scene: {SCENE_DESCRIPTION}"
         )
-        parts.append({"text": instruction})
+        parts.append({"text": full_prompt})
     
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {
-            "responseModalities": ["IMAGE"]
+            "responseModalities": ["IMAGE"],
+            "temperature": 0.4  # Niższa temperatura = bardziej przewidywalne, mniej halucynacji
         }
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=90)
-        if response.status_code == 200:
-            data = response.json()
-            # Odpowiedź Gemini zawiera parts - szukamy tego z inline_data (obrazek)
-            for part in data['candidates'][0]['content']['parts']:
-                if 'inlineData' in part or 'inline_data' in part:
-                    inline = part.get('inlineData') or part.get('inline_data')
-                    img_data = base64.b64decode(inline['data'])
-                    img = Image.open(io.BytesIO(img_data))
-                    
-                    # Przycinanie do proporcji 21:18.7 jak wcześniej
-                    w, h = img.size
-                    target_ratio = 21.0 / 18.7
-                    if w / h > target_ratio:
-                        new_w = int(h * target_ratio)
-                        left = (w - new_w) / 2
-                        img_cropped = img.crop((left, 0, left + new_w, h))
-                    else:
-                        new_h = int(w / target_ratio)
-                        top = (h - new_h) / 2
-                        img_cropped = img.crop((0, top, w, top + new_h))
-                    
-                    out_bytes = io.BytesIO()
-                    img_cropped.save(out_bytes, format='PNG')
-                    return out_bytes.getvalue()
-            
-            st.error("API zwróciło odpowiedź bez obrazu. Treść: " + str(data)[:500])
-        else:
-            st.error(f"Błąd API ({response.status_code}): {response.text[:500]}")
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        
+        if response.status_code != 200:
+            st.error(f"API zwróciło błąd ({response.status_code}): {response.text[:800]}")
+            return _fallback_image()
+        
+        data = response.json()
+        
+        # Obsługa braku kandydatów (np. blokada safety)
+        if 'candidates' not in data or len(data['candidates']) == 0:
+            st.error(f"API nie zwróciło obrazu. Pełna odpowiedź: {str(data)[:800]}")
+            return _fallback_image()
+        
+        candidate = data['candidates'][0]
+        
+        # Sprawdzenie czy nie było blokady
+        if candidate.get('finishReason') in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST'):
+            st.error(f"Generacja zablokowana przez safety filter: {candidate.get('finishReason')}")
+            return _fallback_image()
+        
+        # Ekstrakcja obrazu z parts (może być camelCase lub snake_case)
+        content_parts = candidate.get('content', {}).get('parts', [])
+        for part in content_parts:
+            inline = part.get('inlineData') or part.get('inline_data')
+            if inline and inline.get('data'):
+                img_data = base64.b64decode(inline['data'])
+                return _crop_to_target_ratio(img_data)
+        
+        # Gdy nie ma obrazu - pokazujemy co zwrócił model (często tekst z wyjaśnieniem)
+        text_response = ""
+        for part in content_parts:
+            if part.get('text'):
+                text_response += part['text'] + "\n"
+        
+        st.error(f"Model nie zwrócił obrazu. Odpowiedź modelu: {text_response[:500] or 'brak'}")
+        return _fallback_image()
+        
+    except requests.exceptions.Timeout:
+        st.error("Timeout - model nie odpowiedział w 120 sekund. Spróbuj ponownie.")
+        return _fallback_image()
     except Exception as e:
         st.error(f"Błąd komunikacji z modelem: {e}")
-    
-    # Fallback
-    img_fallback = Image.new('RGB', (2100, 1870), color=(40, 40, 45))
+        return _fallback_image()
+
+
+def _fallback_image():
+    """Ciemny placeholder jeśli generacja się nie uda."""
+    img_fallback = Image.new('RGB', (2100, 1870), color=(15, 15, 18))
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
     return out_fallback.getvalue()
+
+
 def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
     czysta_folia = folia.split('(')[0].strip()
@@ -198,6 +304,7 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie,
     wybrany_tekst = random.choice(szablony)
     return f"{wybrany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
 
+
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
@@ -205,11 +312,13 @@ def download_file(service, file_id):
     while not done: _, done = downloader.next_chunk()
     fh.seek(0); return fh
 
+
 def pptx_to_pdf(input_path):
     try:
         subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.getcwd(), input_path], check=True, capture_output=True)
         return os.path.basename(input_path).replace('.pptx', '.pdf')
     except: return None
+
 
 # --- OBSŁUGA GOOGLE DRIVE DLA OFERT ---
 def pobierz_lub_stworz_folder_oferty(service, parent_id):
@@ -227,6 +336,7 @@ def pobierz_lub_stworz_folder_oferty(service, parent_id):
         return folder.get('id')
     return items[0].get('id')
 
+
 def wgraj_pdf_na_dysk(service, folder_id, file_name, file_bytes):
     try:
         file_metadata = {
@@ -236,7 +346,6 @@ def wgraj_pdf_na_dysk(service, folder_id, file_name, file_bytes):
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='application/pdf', resumable=True)
         file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
         
-        # Uprawnienia do odczytu dla wszystkich posiadających link
         service.permissions().create(
             fileId=file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
@@ -247,7 +356,7 @@ def wgraj_pdf_na_dysk(service, folder_id, file_name, file_bytes):
         st.error(f"Błąd podczas zapisu pliku PDF na Google Drive: {e}")
         return None
 
-# --- ZAPIS DO REJESTRU ---
+
 def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena, pdf_link):
     try:
         sheet_rejestr = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
@@ -259,8 +368,9 @@ def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena,
         st.error(f"Nie udało się zapisać do bazy (Rejestr): {e}")
         return False
 
+
 def replace_text_in_shape(shape, replacements):
-    """Rekurencyjnie wyszukuje i podmienia tagi tekstowe, wchodząc również w tabele i grupy obiektów."""
+    """Rekurencyjnie wyszukuje i podmienia tagi tekstowe."""
     if hasattr(shape, "has_text_frame") and shape.has_text_frame:
         for p in shape.text_frame.paragraphs:
             p_text = "".join(run.text for run in p.runs)
@@ -278,9 +388,10 @@ def replace_text_in_shape(shape, replacements):
             for cell in row.cells:
                 replace_text_in_shape(cell, replacements)
                 
-    if shape.shape_type == 6: # msoGroup
+    if shape.shape_type == 6:  # msoGroup
         for subshape in shape.shapes:
             replace_text_in_shape(subshape, replacements)
+
 
 # --- APLIKACJA ---
 st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
@@ -293,7 +404,6 @@ client = gspread.authorize(creds)
 results = service.files().list(q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false", fields="files(id, name)").execute()
 pliki_na_dysku = results.get('files', [])
 
-# POBIERANIE CENNIKA v3
 try:
     sheet_cennik = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Cennik usług")
     naglowki = [c.replace('\n', ' ').replace('\r', '').strip() for c in sheet_cennik.get_all_values()[0]]
@@ -301,6 +411,7 @@ try:
 except Exception as e:
     st.error(f"Błąd ładowania Cennika v3. Upewnij się, że link i nazwa zakładki 'Cennik usług' są poprawne. Błąd: {e}")
     st.stop()
+
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
@@ -340,31 +451,85 @@ with st.sidebar:
     st.markdown("---")
     st.title("📸 Wizualizacja")
     
-    uploaded_files = st.file_uploader("Opcjonalnie: Wgraj zdjęcia poglądowe (np. nowej karoserii ze strony producenta)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+    st.caption(
+        "💡 **Rekomendacja:** wgraj 1-3 zdjęcia auta z konfiguratora producenta lub press-kitu "
+        "(różne ujęcia tego samego modelu). Model AI zachowa bryłę i zmieni tylko kolor na ciemny garaż."
+    )
+    
+    uploaded_files = st.file_uploader(
+        "Zdjęcia referencyjne (opcjonalnie, ale mocno zalecane dla nowych modeli)", 
+        type=['png', 'jpg', 'jpeg'], 
+        accept_multiple_files=True
+    )
+    
+    # Pole URL - alternatywa dla uploadu (np. prosto z konfiguratora producenta)
+    url_zdjecia = st.text_input(
+        "...lub wklej URL zdjęcia (np. z konfiguratora)",
+        help="Bezpośredni link do obrazka .jpg/.png ze strony producenta"
+    )
 
-    if st.button("🪄 GENERUJ WIZUALIZACJĘ AI"):
-        extra = f" {gen_code}," if gen_code else ""
-        if "Bezbarwne" in f_cat:
-            finish = "matte/satin finish" if "Stealth" in f_color else "high gloss finish"
-            # Zmieniony prompt, budowany w zależności od dostępności zdjęcia, skupiający się na kolorze
-            prompt_color = f"clear PPF giving it a {finish}"
-            prompt_full = f"{year} {final_brand} {final_model} ({body}). {extra} Car paint color: {paint_color}. The car is completely wrapped in clear PPF giving it a {finish}."
-        else:
-            prompt_color = f"{f_brand} {f_color} finish"
-            prompt_full = f"{year} {final_brand} {final_model} ({body}). {extra} Wrapped in {f_brand} {f_color}."
-            
-        ref_image_bytes = None
-        ref_mime_type = None
+    if st.button("🪄 GENERUJ WIZUALIZACJĘ AI", type="primary"):
+        # --- BUDOWA OPISU AUTA (car_description) ---
+        extra_code = f" ({gen_code})" if gen_code else ""
+        car_description = (
+            f"{year} {final_brand} {final_model}{extra_code}, body type: {body}. "
+            f"This is a {segment_final.replace('Segment ', 'segment ')} vehicle."
+        )
         
+        # --- BUDOWA OPISU KOLORU (color_description) ---
+        if "Bezbarwne" in f_cat:
+            if "Stealth" in f_color:
+                color_description = (
+                    f"the original {paint_color} factory paint covered with matte/satin transparent PPF film "
+                    f"(XPEL Stealth) giving the paint a deep matte finish while keeping the original color visible"
+                )
+            else:
+                color_description = (
+                    f"the original {paint_color} factory paint covered with high-gloss transparent PPF film "
+                    f"(XPEL Ultimate Plus) giving the paint extra depth and shine"
+                )
+        else:
+            color_description = f"{f_color} vinyl wrap by {f_brand}"
+        
+        # --- ZEBRANIE ZDJĘĆ REFERENCYJNYCH ---
+        reference_images = []
+        
+        # Z uploadu
         if uploaded_files:
-            ref_image_bytes = uploaded_files[0].read()
-            ref_mime_type = uploaded_files[0].type
-            st.info("Przetwarzam Twoje zdjęcie referencyjne (ZMIANA KOLORU)...")
-            
-        with st.spinner("AI renderuje Twoje auto..."):
-            # Jeśli jest zdjęcie - przekazujemy sam kolor (edycja). Jeśli nie - pełny opis (generacja).
-            active_prompt = prompt_color if ref_image_bytes else prompt_full
-            img_data = generate_ai_image(active_prompt, ref_image_bytes, ref_mime_type)
+            for uf in uploaded_files:
+                img_bytes = uf.read()
+                mime = uf.type if uf.type else "image/jpeg"
+                reference_images.append((img_bytes, mime))
+        
+        # Z URL (jeśli nie ma uploadu ale jest URL)
+        if url_zdjecia and url_zdjecia.strip():
+            try:
+                resp = requests.get(url_zdjecia.strip(), timeout=15, headers={
+                    'User-Agent': 'Mozilla/5.0'
+                })
+                if resp.status_code == 200:
+                    mime = resp.headers.get('content-type', 'image/jpeg').split(';')[0].strip()
+                    if 'image' in mime:
+                        reference_images.append((resp.content, mime))
+                    else:
+                        st.warning(f"URL nie wskazuje na obrazek (typ: {mime}).")
+                else:
+                    st.warning(f"Nie mogę pobrać obrazka z URL (kod: {resp.status_code}).")
+            except Exception as e:
+                st.warning(f"Nie udało się pobrać zdjęcia z URL: {e}")
+        
+        # --- KOMUNIKATY DLA UŻYTKOWNIKA ---
+        if reference_images:
+            st.info(f"🎯 Tryb edycji: używam {len(reference_images)} zdjęcia/zdjęć referencyjnych auta.")
+        else:
+            st.info("🎨 Tryb generacji: tworzę auto od zera na podstawie opisu (jakość może być niższa dla bardzo nowych modeli - rozważ dodanie zdjęcia referencyjnego).")
+        
+        with st.spinner("Gemini 2.5 Flash Image renderuje Twoje auto w ciemnym garażu LED..."):
+            img_data = generate_ai_image(
+                car_description=car_description,
+                color_description=color_description,
+                reference_images=reference_images if reference_images else None
+            )
             if img_data:
                 st.session_state['ai_img'] = img_data
                 
@@ -372,6 +537,7 @@ with st.sidebar:
     st.header("📦 Dodatki do oferty")
     dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
     wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name']) if st.checkbox(d['name'], value=False)]
+
 
 # ZAKŁADKI W GŁÓWNYM PANELU
 tab_kreator, tab_rejestr = st.tabs(["⚙️ Kreator Ofert", "📋 Ewidencja (Rejestr)"])
@@ -498,7 +664,6 @@ with tab_kreator:
                 final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
                 nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
                 
-                # Odszukanie/Utworzenie folderu Oferty i wgranie pliku
                 folder_oferty_id = pobierz_lub_stworz_folder_oferty(service, PARENT_FOLDER_ID)
                 utworzony_link = wgraj_pdf_na_dysk(service, folder_oferty_id, nazwa_pliku_wyjsciowego, final_io.getvalue())
                 
