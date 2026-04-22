@@ -343,7 +343,7 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie,
     kontekst = (
         f"Autor wiadomości: {handlowiec_imie}, {handlowiec_stanowisko}\n"
         f"Firma: ITS WRAP (premium detailing, folie ochronne PPF, oklejanie samochodów)\n"
-        f"Klient: {klient if klient else 'nieznany'}\n"
+        f"Klient: {klient if klient.strip() else 'NIEZNANE IMIĘ (zwracaj się ogólnie)'}\n"
         f"Samochód klienta: {marka_model}\n"
         f"Zamówiona usługa: {pakiet}\n"
         f"Wybrana folia: {czysta_folia}"
@@ -354,23 +354,29 @@ def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie,
 KONTEKST:
 {kontekst}
 
-WYMAGANIA TECHNICZNE:
-- Zacznij dokładnie od: "{wolacz},"
-- Potem pusta linia, potem treść główna.
-- Treść: DOKŁADNIE 3-4 zdania, nie więcej.
-- NIE dodawaj podpisu, nagłówka ani formuły pożegnalnej - podpis zostanie dodany automatycznie.
-- Odpowiedz WYŁĄCZNIE treścią wiadomości, bez żadnych komentarzy, bez markdownu, bez "oto twoja wiadomość".
+STRUKTURA WYJŚCIA (OBOWIĄZKOWA):
+Linia 1: "{wolacz},"
+Linia 2: (pusta)
+Linia 3+: Treść główna - DOKŁADNIE 3-4 zdania.
 
-WYMAGANIA TREŚCIOWE:
-- Ton: profesjonalny, ciepły, bez nachalnej sprzedaży.
-- Wspomnij konkretnie markę/model auta klienta.
-- Wspomnij konkretnie nazwę folii ({czysta_folia}) i krótko uzasadnij dlaczego to dobry wybór (1 korzyść).
-- Używaj formy "Pan/Pani" (ty kolumnowe), nigdy nie przechodź na "ty".
-- Unikaj sloganów typu "bezkompromisowe rozwiązanie", "pasja", "najwyższa jakość na długie lata" - to zużyte frazy.
-- Brzmij jak człowiek, który naprawdę zna się na autach i zależy mu na tym konkretnym kliencie.
+ZASADY TECHNICZNE:
+- Odpowiedz WYŁĄCZNIE treścią wiadomości. Bez preambuły, bez komentarzy, bez markdownu, bez cudzysłowów.
+- NIE dodawaj podpisu, nazwiska, stanowiska ani formuły pożegnalnej ("Pozdrawiam", "Z poważaniem" itp.) - podpis zostanie dodany automatycznie.
 - NIE używaj emoji.
 
-Napisz teraz wstęp:"""
+WYMAGANIA TREŚCIOWE (KAŻDA JEST OBOWIĄZKOWA):
+1. MUSISZ wprost wspomnieć markę i model auta: {marka_model}
+2. MUSISZ wprost wspomnieć nazwę folii: {czysta_folia}
+3. MUSISZ podać jedną konkretną korzyść z zastosowania tej folii (ochrona lakieru, efekt wizualny, trwałość - wybierz jedną i rozwiń jednym zdaniem).
+4. Ton: profesjonalny, ciepły, ludzki. Bez sprzedażowej nachalności.
+5. Forma: "Pan/Pani" (ty kolumnowe). Nigdy nie przechodź na "ty".
+6. ZAKAZANE frazy (są zużyte i brzmią sztucznie): "bezkompromisowe rozwiązanie", "pasja do motoryzacji", "najwyższa jakość", "na długie lata", "spokój ducha", "perfekcyjna prezencja".
+
+PRZYKŁADY DOBREGO STYLU (do inspiracji, NIE kopiuj):
+- "Dziękuję za zaufanie przy wyborze zabezpieczenia Pańskiego Porsche 911. Folia XPEL Ultimate Plus, którą zaproponowałem, skutecznie ochroni lakier przed odpryskami i zachowa fabryczny połysk przez wiele sezonów użytkowania. Zapraszam do szczegółów wyceny."
+- "Miło mi przesłać wycenę zabezpieczenia BMW Serii 3. Matowe wykończenie 3M 2080 Matte Black nada autu unikalny charakter, jednocześnie chroniąc oryginalny lakier pod spodem. Wszystkie szczegóły znajduje Pan w dalszej części oferty."
+
+Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
     
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -383,7 +389,7 @@ Napisz teraz wstęp:"""
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.9,  # wysoka -> za każdym razem świeży, unikalny tekst
-                "maxOutputTokens": 400
+                "maxOutputTokens": 500
             }
         }
         
@@ -411,21 +417,30 @@ Napisz teraz wstęp:"""
         wygenerowany_tekst = wygenerowany_tekst.strip()
         
         # Sanity check - jeśli model zwrócił coś podejrzanie krótkiego, fallback
-        if len(wygenerowany_tekst) < 50:
+        if len(wygenerowany_tekst) < 80:
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
-        # Obrona przed modelem który mimo instrukcji doda swój podpis -
-        # obcinamy wszystko od pierwszego "Z poważaniem", "Z wyrazami", "Pozdrawiam" itp.
-        frazy_podpisu = [
-            "z motoryzacyjnym", "z poważaniem", "z wyrazami", "pozdrawiam",
-            "serdecznie pozdr", "łączę pozdr", "z uszanowaniem"
+        # Obrona przed modelem, który mimo instrukcji sam doda podpis.
+        # KLUCZOWE: szukamy fraz TYLKO na początku linii (po \n), nigdy w środku zdania.
+        # Inaczej fraza jak "za zainteresowanie naszą" byłaby obcięta na "nasz" itp.
+        linie = wygenerowany_tekst.split('\n')
+        frazy_podpisu_start_linii = [
+            'z motoryzacyjnym', 'z poważaniem', 'z wyrazami',
+            'pozdrawiam', 'serdecznie pozdr', 'łączę pozdr',
+            'z uszanowaniem', 'pozdrowienia', 'z najlepszymi'
         ]
-        dolny_tekst = wygenerowany_tekst.lower()
-        for fraza in frazy_podpisu:
-            idx = dolny_tekst.find(fraza)
-            if idx != -1:
-                wygenerowany_tekst = wygenerowany_tekst[:idx].rstrip()
-                break
+        linie_wynikowe = []
+        for linia in linie:
+            linia_lower = linia.strip().lower()
+            if any(linia_lower.startswith(fraza) for fraza in frazy_podpisu_start_linii):
+                break  # od tej linii w dół - to podpis, odcinamy
+            linie_wynikowe.append(linia)
+        
+        wygenerowany_tekst = '\n'.join(linie_wynikowe).strip()
+        
+        # Drugi sanity check - po obcięciu podpisu może być za krótko
+        if len(wygenerowany_tekst) < 80:
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         return f"{wygenerowany_tekst}\n\nZ motoryzacyjnym pozdrowieniem,\n{handlowiec_imie}\n{handlowiec_stanowisko}"
         
