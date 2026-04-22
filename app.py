@@ -100,11 +100,9 @@ def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=No
     
     if reference_image_bytes and reference_mime_type:
         base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
-        # Poprawiona struktura obiektu ReferenceImage (zastosowanie klucza 'image')
         instance["referenceImages"] = [
             {
-                "referenceId": 1,
-                "image": {
+                "referenceImage": {
                     "bytesBase64Encoded": base64_image,
                     "mimeType": reference_mime_type
                 }
