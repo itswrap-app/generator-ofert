@@ -90,7 +90,7 @@ def install_fonts():
             if f.lower().endswith((".ttf", ".otf")): shutil.copy(os.path.join(font_src, f), font_dst)
         subprocess.run(["fc-cache", "-f"], capture_output=True)
 
-def generate_ai_image(prompt, reference_image_bytes=None):
+def generate_ai_image(prompt, reference_image_bytes=None, reference_mime_type=None):
     api_key = st.secrets["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict?key={api_key}"
     
@@ -98,11 +98,14 @@ def generate_ai_image(prompt, reference_image_bytes=None):
     
     instance = {"prompt": wzmocniony_prompt}
     
-    if reference_image_bytes:
+    if reference_image_bytes and reference_mime_type:
         base64_image = base64.b64encode(reference_image_bytes).decode('utf-8')
         instance["referenceImages"] = [
             {
-                "referenceImage": {"bytesBase64Encoded": base64_image}
+                "referenceImage": {
+                    "bytesBase64Encoded": base64_image,
+                    "mimeType": reference_mime_type
+                }
             }
         ]
 
@@ -316,12 +319,15 @@ with st.sidebar:
             prompt = f"Automotive studio photography of the newest {year} {final_brand} {final_model} ({body}). {extra} Wrapped in {f_brand} {f_color}."
             
         ref_image_bytes = None
+        ref_mime_type = None
+        
         if uploaded_files:
             ref_image_bytes = uploaded_files[0].read()
+            ref_mime_type = uploaded_files[0].type
             st.info("Przetwarzam Twoje zdjęcie referencyjne...")
 
         with st.spinner("AI renderuje Twoje auto..."):
-            img_data = generate_ai_image(prompt, ref_image_bytes)
+            img_data = generate_ai_image(prompt, ref_image_bytes, ref_mime_type)
             if img_data:
                 st.session_state['ai_img'] = img_data
                 
@@ -475,9 +481,7 @@ with tab_rejestr:
         if dane_rejestru:
             df_rejestr = pd.DataFrame(dane_rejestru)
             
-            # Formatyzacja kolumny, zakładając że kolumna nazywa się podobnie do tego co zostało wysłane.
-            # Ważne: w arkuszu "Rejestr" trzeba dopisać w rzędzie z nagłówkami nową kolumnę, np. "Link PDF".
-            nazwa_kolumny_link = df_rejestr.columns[-1] # domyślnie ostatnia dodana kolumna to link
+            nazwa_kolumny_link = df_rejestr.columns[-1]
             
             st.data_editor(
                 df_rejestr,
