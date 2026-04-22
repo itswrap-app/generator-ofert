@@ -404,7 +404,14 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.9,  # wysoka -> za każdym razem świeży, unikalny tekst
-                "maxOutputTokens": 500
+                "maxOutputTokens": 1024,  # spory zapas - thinking może jeszcze odgryzać część
+                # KLUCZOWE: wyłączamy "thinking mode" w Gemini 2.5 Flash.
+                # Bez tego model zjada nawet kilkaset tokenów na wewnętrzne myślenie,
+                # które liczy się do maxOutputTokens - efekt: odpowiedź urwana w połowie słowa.
+                # Do prostego zadania (4 zdania tekstu) myślenie jest zbędne.
+                "thinkingConfig": {
+                    "thinkingBudget": 0
+                }
             }
         }
         
@@ -433,6 +440,19 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         
         if finish_reason in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'RECITATION'):
             st.error(f"❌ Gemini zablokował odpowiedź (powód: {finish_reason}) - używam szablonu awaryjnego.")
+            return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
+        
+        if finish_reason == 'MAX_TOKENS':
+            # Model uderzył w limit - zwykle winne są "thinking tokens" w Gemini 2.5.
+            # Mamy już thinkingBudget:0 i maxOutputTokens:1024, więc to NIE powinno się zdarzać.
+            # Jeśli jednak się zdarzy - pokazujemy ile tokenów model zużył na thinking.
+            usage = data.get('usageMetadata', {})
+            thoughts = usage.get('thoughtsTokenCount', 'n/a')
+            output = usage.get('candidatesTokenCount', 'n/a')
+            st.error(
+                f"❌ Gemini uderzył w limit tokenów. Thinking: {thoughts}, Output: {output}. "
+                f"Używam szablonu awaryjnego."
+            )
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         parts = candidate.get('content', {}).get('parts', [])
