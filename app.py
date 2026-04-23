@@ -658,8 +658,414 @@ def replace_text_in_shape(shape, replacements):
 
 
 # --- APLIKACJA ---
-st.set_page_config(page_title="Zap & Studio Ultimate", layout="wide")
+st.set_page_config(
+    page_title="IT'S WRAP - Generator Ofert",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 install_fonts()
+
+# ==========================================================================
+# STYL CI IT'S WRAP - zgodny z Brand Manual 2026
+# 
+# Paleta kolorów (z brand manual str. 16, 23):
+# - IT'S WRAP BLUE: #007DC5 (primary, akcenty, przyciski)
+# - IT'S WRAP NAVY BLUE: #042643 (sidebar, ciemne tło)
+# - SEMI 1-4: #003559, #004470, #005489, #0064A3 (gradienty/tła)
+# - Biel #FFFFFF, Czerń #000000
+#
+# Typografia (str. 26):
+# - URW DIN (bazowy) - font komercyjny, trudno dostępny
+# - Roboto (Google Font) - DOPUSZCZALNY ZAMIENNIK na www - używamy tego
+# ==========================================================================
+
+# Ładujemy logo (jeśli jest) - wyświetlane w sidebar
+import base64 as _b64_css
+def _logo_base64(sciezka):
+    try:
+        with open(sciezka, 'rb') as f:
+            return _b64_css.b64encode(f.read()).decode('utf-8')
+    except FileNotFoundError:
+        return None
+
+# Szukamy logo w typowych lokalizacjach repo
+LOGO_PATH_CANDIDATES = ['logo.png', 'assets/logo.png', 'static/logo.png', 'images/logo.png']
+LOGO_B64 = None
+LOGO_EXT = None
+for _cand in LOGO_PATH_CANDIDATES:
+    if os.path.exists(_cand):
+        LOGO_B64 = _logo_base64(_cand)
+        LOGO_EXT = _cand.split('.')[-1]
+        break
+
+st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+
+<style>
+/* ==========================================================================
+   PALETA MARKI IT'S WRAP
+   ========================================================================== */
+:root {
+    --iw-blue: #007DC5;
+    --iw-blue-dark: #0064A3;
+    --iw-blue-darker: #005489;
+    --iw-navy: #042643;
+    --iw-navy-light: #003559;
+    --iw-navy-lighter: #004470;
+    --iw-white: #FFFFFF;
+    --iw-black: #000000;
+    --iw-gray-light: #F5F7FA;
+    --iw-gray-border: #E1E7ED;
+    --iw-gray-text: #4A5568;
+}
+
+/* ==========================================================================
+   TYPOGRAFIA - Roboto jako font bazowy (zgodny z brand manualem)
+   ========================================================================== */
+html, body, [class*="css"], .stApp, .stMarkdown, .stText,
+.stSelectbox, .stTextInput, .stNumberInput, .stButton,
+.stRadio, .stCheckbox, .stFileUploader, .stDataFrame {
+    font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+/* Nagłówki - pogrubione, Roboto 700/900 */
+h1, h2, h3, h4, h5, h6,
+.stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+    font-family: 'Roboto', sans-serif !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.01em;
+    color: var(--iw-navy) !important;
+}
+
+/* H1 jak tytuły sekcji w brand manualu - uppercase, w niebieskim */
+h1, .stMarkdown h1 {
+    color: var(--iw-blue) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    font-weight: 900 !important;
+    border-bottom: 3px solid var(--iw-blue);
+    padding-bottom: 12px;
+    margin-bottom: 24px;
+}
+
+/* ==========================================================================
+   GŁÓWNY PANEL - jasne tło (papier firmowy)
+   ========================================================================== */
+.stApp {
+    background-color: var(--iw-white);
+}
+
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+    max-width: 1400px;
+}
+
+/* ==========================================================================
+   SIDEBAR - ciemny navy (inspirowany belką mailową w CI)
+   ========================================================================== */
+section[data-testid="stSidebar"] {
+    background-color: var(--iw-navy) !important;
+    border-right: 4px solid var(--iw-blue);
+}
+
+section[data-testid="stSidebar"] * {
+    color: var(--iw-white) !important;
+}
+
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] .stMarkdown h1,
+section[data-testid="stSidebar"] .stMarkdown h2 {
+    color: var(--iw-white) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700 !important;
+    font-size: 1rem;
+    border-bottom: 2px solid var(--iw-blue);
+    padding-bottom: 6px;
+    margin-top: 16px;
+}
+
+/* Separator w sidebarze - subtelna kreska w blue */
+section[data-testid="stSidebar"] hr {
+    border-color: rgba(0, 125, 197, 0.3) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* Kontrolki w sidebarze - ciemne pola z niebieskim borderem */
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] select,
+section[data-testid="stSidebar"] textarea,
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background-color: var(--iw-navy-light) !important;
+    color: var(--iw-white) !important;
+    border: 1px solid rgba(0, 125, 197, 0.4) !important;
+}
+
+section[data-testid="stSidebar"] input:focus,
+section[data-testid="stSidebar"] [data-baseweb="select"]:focus-within > div {
+    border-color: var(--iw-blue) !important;
+    box-shadow: 0 0 0 1px var(--iw-blue) !important;
+}
+
+section[data-testid="stSidebar"] label {
+    color: rgba(255, 255, 255, 0.85) !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+}
+
+/* File uploader w sidebarze */
+section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"] {
+    background-color: var(--iw-navy-light) !important;
+    border: 2px dashed rgba(0, 125, 197, 0.5) !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
+    border-color: var(--iw-blue) !important;
+    background-color: var(--iw-navy-lighter) !important;
+}
+
+/* ==========================================================================
+   PRZYCISKI - w kolorze IT'S WRAP BLUE
+   ========================================================================== */
+.stButton > button {
+    background-color: var(--iw-blue) !important;
+    color: var(--iw-white) !important;
+    border: none !important;
+    border-radius: 4px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.9rem !important;
+    padding: 10px 24px !important;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(4, 38, 67, 0.15);
+}
+
+.stButton > button:hover {
+    background-color: var(--iw-blue-dark) !important;
+    box-shadow: 0 4px 12px rgba(0, 125, 197, 0.3);
+    transform: translateY(-1px);
+}
+
+.stButton > button:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(4, 38, 67, 0.15);
+}
+
+/* Primary button (oznaczony type="primary") - pełna bryła blue z intensywniejszym hover */
+.stButton > button[kind="primary"] {
+    background-color: var(--iw-blue) !important;
+    font-weight: 900 !important;
+    padding: 12px 28px !important;
+}
+
+.stButton > button[kind="primary"]:hover {
+    background-color: var(--iw-navy) !important;
+}
+
+/* Download button */
+.stDownloadButton > button {
+    background-color: var(--iw-navy) !important;
+    color: var(--iw-white) !important;
+    border: 2px solid var(--iw-blue) !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+}
+
+.stDownloadButton > button:hover {
+    background-color: var(--iw-blue) !important;
+    border-color: var(--iw-blue) !important;
+}
+
+/* ==========================================================================
+   POLA TEKSTOWE W GŁÓWNYM PANELU
+   ========================================================================== */
+.main input, .main select, .main textarea,
+.main [data-baseweb="select"] > div,
+.main [data-baseweb="input"] {
+    border: 1px solid var(--iw-gray-border) !important;
+    border-radius: 4px !important;
+    background-color: var(--iw-white) !important;
+}
+
+.main input:focus, .main textarea:focus,
+.main [data-baseweb="select"]:focus-within > div,
+.main [data-baseweb="input"]:focus-within {
+    border-color: var(--iw-blue) !important;
+    box-shadow: 0 0 0 2px rgba(0, 125, 197, 0.15) !important;
+}
+
+/* ==========================================================================
+   ZAKŁADKI (TABS)
+   ========================================================================== */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    border-bottom: 2px solid var(--iw-gray-border);
+    background: transparent;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 12px 24px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 0.9rem !important;
+    color: var(--iw-gray-text) !important;
+}
+
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    color: var(--iw-blue) !important;
+    border-bottom: 3px solid var(--iw-blue) !important;
+    margin-bottom: -2px;
+}
+
+/* ==========================================================================
+   ALERTY / KOMUNIKATY - spójne z paletą marki
+   ========================================================================== */
+div[data-testid="stAlert"] {
+    border-radius: 4px !important;
+    border-left-width: 4px !important;
+}
+
+/* INFO - niebieski akcent */
+div[data-baseweb="notification"][kind="info"],
+div[data-testid="stAlert"][class*="info"] {
+    background-color: rgba(0, 125, 197, 0.08) !important;
+    border-left-color: var(--iw-blue) !important;
+}
+
+/* SUCCESS - spójna zieleń brand-adjacent */
+div[data-testid="stAlert"][class*="success"] {
+    background-color: rgba(34, 139, 89, 0.08) !important;
+    border-left-color: #228B59 !important;
+}
+
+/* ==========================================================================
+   PODGLĄD WIZUALIZACJI - subtelna ramka
+   ========================================================================== */
+.main [data-testid="stImage"] img {
+    border-radius: 4px;
+    border: 1px solid var(--iw-gray-border);
+    box-shadow: 0 4px 16px rgba(4, 38, 67, 0.08);
+}
+
+/* ==========================================================================
+   DATA EDITOR / TABELE REJESTRU
+   ========================================================================== */
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+    border: 1px solid var(--iw-gray-border) !important;
+    border-radius: 4px !important;
+}
+
+/* Nagłówki tabel */
+[data-testid="stDataFrame"] thead th,
+[data-testid="stDataEditor"] thead th {
+    background-color: var(--iw-navy) !important;
+    color: var(--iw-white) !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    font-size: 0.8rem !important;
+    letter-spacing: 0.02em;
+}
+
+/* ==========================================================================
+   STOPKA / DOPISKI
+   ========================================================================== */
+.iw-footer {
+    margin-top: 3rem;
+    padding: 1.5rem 0;
+    border-top: 2px solid var(--iw-gray-border);
+    text-align: center;
+    color: var(--iw-gray-text);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.iw-footer strong {
+    color: var(--iw-blue);
+    font-weight: 900;
+}
+
+/* ==========================================================================
+   NAGŁÓWEK W SIDEBARZE - logo + pasek
+   ========================================================================== */
+.iw-sidebar-logo {
+    text-align: center;
+    padding: 1rem 0.5rem 1.5rem 0.5rem;
+    margin-bottom: 0.5rem;
+    border-bottom: 2px solid var(--iw-blue);
+}
+
+.iw-sidebar-logo img {
+    max-width: 180px;
+    height: auto;
+}
+
+.iw-sidebar-claim {
+    text-align: center;
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    color: var(--iw-blue) !important;
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-top: 0.5rem;
+}
+
+/* ==========================================================================
+   NAGŁÓWEK GŁÓWNEGO PANELU - styl jak strona tytułowa brand manualu
+   ========================================================================== */
+.iw-main-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 24px 0 20px 0;
+    border-bottom: 3px solid var(--iw-blue);
+    margin-bottom: 32px;
+}
+
+.iw-main-header-text {
+    flex: 1;
+}
+
+.iw-main-header-title {
+    font-family: 'Roboto', sans-serif;
+    font-weight: 900;
+    font-size: 2rem;
+    color: var(--iw-navy);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    line-height: 1.1;
+    margin: 0;
+}
+
+.iw-main-header-subtitle {
+    font-family: 'Roboto', sans-serif;
+    font-weight: 400;
+    font-size: 0.85rem;
+    color: var(--iw-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    margin-top: 6px;
+}
+
+/* Hide default Streamlit branding for cleaner look */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header[data-testid="stHeader"] {
+    background: transparent;
+}
+</style>
+""", unsafe_allow_html=True)
 
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 service = build('drive', 'v3', credentials=creds)
@@ -684,11 +1090,30 @@ except Exception as e:
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
-    st.title("👤 Opiekun Klienta")
+    # --- NAGŁÓWEK SIDEBARA: LOGO IT'S WRAP + CLAIM ---
+    if LOGO_B64:
+        st.markdown(f"""
+        <div class="iw-sidebar-logo">
+            <img src="data:image/{LOGO_EXT};base64,{LOGO_B64}" alt="IT'S WRAP">
+            <div class="iw-sidebar-claim">Make It Change</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # Fallback tekstowy jeśli logo nie zostało wgrane do repo
+        st.markdown("""
+        <div class="iw-sidebar-logo">
+            <div style="font-size: 1.5rem; font-weight: 900; letter-spacing: 0.05em; color: #FFFFFF;">
+                IT'S WRAP
+            </div>
+            <div class="iw-sidebar-claim">Make It Change</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("### Opiekun Klienta")
     wybrany_handlowiec = st.selectbox("Kto przygotowuje ofertę?", list(HANDLOWCY.keys()))
     
     st.markdown("---")
-    st.title("🚗 Studio AI")
+    st.markdown("### Studio AI")
     brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
     
     if brand == "Inna marka...":
@@ -708,7 +1133,7 @@ with st.sidebar:
     gen_code = st.text_input("Kod karoserii (Opcjonalnie)", help="Np. G70, 992")
     
     st.markdown("---")
-    st.title("🎨 Folia i Kolor")
+    st.markdown("### Folia i Kolor")
     f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()))
     f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
     f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
@@ -718,7 +1143,7 @@ with st.sidebar:
         paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
 
     st.markdown("---")
-    st.title("📸 Wizualizacja")
+    st.markdown("### Wizualizacja AI")
     
     st.caption(
         "💡 **Rekomendacja:** wgraj 1-3 zdjęcia auta z konfiguratora producenta lub press-kitu "
@@ -803,7 +1228,7 @@ with st.sidebar:
                 st.session_state['ai_img'] = img_data
                 
     st.markdown("---")
-    st.header("📦 Dodatki do oferty")
+    st.markdown("### Dodatki do oferty")
     dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
     wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name']) if st.checkbox(d['name'], value=False)]
 
@@ -812,7 +1237,15 @@ with st.sidebar:
 tab_kreator, tab_rejestr = st.tabs(["⚙️ Kreator Ofert", "📋 Ewidencja (Rejestr)"])
 
 with tab_kreator:
-    st.title("🛡️ Generator Ofert ITS WRAP")
+    # Nagłówek w stylu okładek brand manualu
+    st.markdown("""
+    <div class="iw-main-header">
+        <div class="iw-main-header-text">
+            <div class="iw-main-header-title">Generator Ofert</div>
+            <div class="iw-main-header-subtitle">Professional Car Wrapping &amp; PPF · IT'S WRAP</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     col1, col2 = st.columns(2)
 
     with col1:
@@ -951,7 +1384,14 @@ with tab_kreator:
                 st.download_button("📥 POBIERZ OFERTĘ PDF LOKALNIE", data=final_io, file_name=nazwa_pliku_wyjsciowego)
 
 with tab_rejestr:
-    st.header("📋 Ostatnio zapisane oferty")
+    st.markdown("""
+    <div class="iw-main-header">
+        <div class="iw-main-header-text">
+            <div class="iw-main-header-title">Ewidencja Ofert</div>
+            <div class="iw-main-header-subtitle">Rejestr · Archiwum · Kontrola</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     try:
         sheet_rejestr_view = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
         dane_rejestru = sheet_rejestr_view.get_all_records()
@@ -982,3 +1422,12 @@ with tab_rejestr:
             st.info("Rejestr jest pusty lub arkusz nie zawiera jeszcze wpisów.")
     except Exception as e:
         st.warning(f"Brak możliwości wczytania rejestru. Pamiętaj, by w nagłówkach bazy (Arkusz 'Rejestr', 1 wiersz) dodać kolumnę na link do PDF. Błąd: {e}")
+
+# --- STOPKA ---
+st.markdown("""
+<div class="iw-footer">
+    <strong>IT'S WRAP</strong> · ONDRE.PL · Rynek Śródecki 4, 61-126 Poznań · +48 602 494 133
+    <br/>
+    <span style="opacity: 0.6; letter-spacing: 0.03em;">www.itswrap.pl · Professional Car Wrapping &amp; PPF · Certyfikowana jakość 3M</span>
+</div>
+""", unsafe_allow_html=True)
