@@ -539,28 +539,66 @@ def pptx_to_pdf(input_path):
 
 from google.oauth2.credentials import Credentials as OAuthCredentials
 
-@st.cache_resource
+# UWAGA: NIE używamy @st.cache_resource bo cache trzymałby unieważniony token
+# nawet po odnowieniu sekretów. Tworzenie klienta jest tanie - pomija się tylko
+# milisekundy, a zyskujemy pewność że zawsze idzie świeży request do Google.
 def get_oauth_drive_service():
     """Tworzy klienta Drive API działającego w imieniu prywatnego konta Google."""
     try:
         oauth_conf = st.secrets["oauth_drive"]
-        creds = OAuthCredentials(
-            token=None,  # brak - zostanie odświeżony automatycznie z refresh_token
-            refresh_token=oauth_conf["refresh_token"],
-            token_uri=oauth_conf["token_uri"],
-            client_id=oauth_conf["client_id"],
-            client_secret=oauth_conf["client_secret"],
-            scopes=['https://www.googleapis.com/auth/drive.file']
-        )
-        return build('drive', 'v3', credentials=creds)
     except KeyError:
         st.error(
-            "Brak konfiguracji [oauth_drive] w secrets.toml. "
+            "🔑 Brak konfiguracji [oauth_drive] w secrets.toml. "
             "Uruchom skrypt generuj_token.py lokalnie aby wygenerować refresh token."
         )
         return None
+    
+    # Walidacja - czy wszystkie 4 wartości są obecne i niepuste
+    wymagane_klucze = ['client_id', 'client_secret', 'refresh_token', 'token_uri']
+    brakujace = [k for k in wymagane_klucze if not oauth_conf.get(k, '').strip()]
+    if brakujace:
+        st.error(f"🔑 W [oauth_drive] brakuje wartości: {', '.join(brakujace)}")
+        return None
+    
+    # Sanity check refresh tokena - powinien zaczynać się od "1//" i mieć min 50 znaków
+    rt = oauth_conf['refresh_token'].strip()
+    if not rt.startswith('1//') or len(rt) < 50:
+        st.error(
+            f"🔑 refresh_token wygląda nieprawidłowo (długość: {len(rt)} znaków, "
+            f"początek: '{rt[:10]}...'). Poprawny token zaczyna się od '1//' i ma 100+ znaków. "
+            f"Wygeneruj nowy używając generuj_token.py."
+        )
+        return None
+    
+    try:
+        creds = OAuthCredentials(
+            token=None,  # zostanie odświeżony automatycznie z refresh_token
+            refresh_token=rt,
+            token_uri=oauth_conf['token_uri'].strip(),
+            client_id=oauth_conf['client_id'].strip(),
+            client_secret=oauth_conf['client_secret'].strip(),
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        # Próbujemy od razu odświeżyć - jeśli token jest unieważniony, dowiemy się TERAZ
+        # zamiast w środku uploadu PDF.
+        from google.auth.transport.requests import Request as AuthRequest
+        creds.refresh(AuthRequest())
+        return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        st.error(f"Błąd inicjalizacji OAuth Drive: {e}")
+        err_str = str(e).lower()
+        if 'invalid_grant' in err_str or 'token has been expired' in err_str or 'revoked' in err_str:
+            st.error(
+                "🔑 **Refresh token został unieważniony przez Google.** Możliwe przyczyny:\n\n"
+                "1. **OAuth consent screen jest w trybie 'Testing'** → tokeny wygasają po 7 dniach. "
+                "   Wejdź w Google Cloud Console → Ekran zgody OAuth → kliknij **'Publish app'**.\n"
+                "2. **Cofnąłeś dostęp aplikacji** na [myaccount.google.com/permissions](https://myaccount.google.com/permissions)\n"
+                "3. **OAuth Client ID został usunięty/zmieniony** w Google Cloud Console\n"
+                "4. **Hasło konta Google zostało zmienione** - inwaliduje wszystkie tokeny\n\n"
+                "**Rozwiązanie:** uruchom ponownie `generuj_token.py` lokalnie, "
+                "skopiuj nowe wartości do Streamlit Secrets."
+            )
+        else:
+            st.error(f"🔑 Błąd inicjalizacji OAuth Drive: {e}")
         return None
 
 
