@@ -279,7 +279,29 @@ FOIL_GROUPS = {
             "Matte Anthracite Metallic",
             "Gloss Silver Grey"
         ]
+    },
+    "Inne (wpisz ręcznie)": {
+        "Wpisz nazwę folii ręcznie": ["___CUSTOM___"]
     }
+}
+
+# ==========================================================================
+# MAPOWANIE PRODUCENTA FOLII -> DOZWOLONE KATEGORIE W CENNIKU
+# Logika sprzężenia panelu wizualizacji z cennikiem:
+# - XPEL produkuje folie PPF (ochronne) -> w cenniku tylko kategoria "PPF"
+# - 3M, Avery, Arlon, Oracal to folie wrapowe -> kategoria "Zmiana koloru"
+# - "Inne" -> bez filtra, klient widzi wszystkie kategorie
+#
+# Specjalny przypadek: XPEL Color (Zmiana Koloru PPF) - to PPF z kolorem,
+# więc dalej kategoria "PPF" (folia ochronna z efektem koloru, nie wrap winylowy).
+# ==========================================================================
+KATEGORIE_DLA_PRODUCENTA = {
+    "XPEL (Folie Ochronne PPF)": ["PPF"],
+    "3M 2080 Series": ["Zmiana koloru"],
+    "Avery Dennison SW900": ["Zmiana koloru"],
+    "Arlon": ["Zmiana koloru"],
+    "Oracal 970RA": ["Zmiana koloru"],
+    "Inne (wpisz ręcznie)": None,  # None = brak filtra, wszystkie kategorie dostępne
 }
 
 # ==========================================================================
@@ -1269,7 +1291,18 @@ with st.sidebar:
     st.markdown("### Folia i Kolor")
     f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()))
     f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
-    f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
+    
+    # Tryb "Inne" - handlowiec wpisuje nazwę folii ręcznie, kategoria w cenniku
+    # odblokowuje się w pełni (bo nie wiemy do której kategorii należy "egzotyczna" folia)
+    if f_brand == "Inne (wpisz ręcznie)":
+        custom_foil = st.text_input(
+            "Nazwa folii (wpisz)",
+            placeholder="np. SUNTEK PPF, Hexis Skintac, własna nazwa...",
+            help="Wpisz dowolną nazwę folii. Po wybraniu 'Inne' w cenniku pojawiają się wszystkie kategorie."
+        )
+        f_color = custom_foil if custom_foil.strip() else "Folia niestandardowa"
+    else:
+        f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
 
     paint_color = ""
     if "Bezbarwne" in f_cat:
@@ -1316,6 +1349,9 @@ with st.sidebar:
                     f"the original {paint_color} factory paint covered with high-gloss transparent PPF film "
                     f"(XPEL Ultimate Plus) giving the paint extra depth and shine"
                 )
+        elif f_brand == "Inne (wpisz ręcznie)":
+            # Tryb własnej folii - nie wiemy jaki producent, opis bardziej ogólny
+            color_description = f"{czysta_nazwa_koloru} vinyl wrap"
         else:
             color_description = f"{czysta_nazwa_koloru} vinyl wrap by {f_brand}"
         
@@ -1381,7 +1417,29 @@ with tab_kreator:
         klient = st.text_input("Imię i Nazwisko Klienta")
         nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
         
-        kategorie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
+        # Filtrowanie kategorii w cenniku na podstawie wybranego producenta folii
+        # (XPEL -> tylko PPF, 3M/Avery/Arlon/Oracal -> tylko Zmiana koloru, Inne -> wszystkie)
+        kategorie_wszystkie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
+        dozwolone_kategorie = KATEGORIE_DLA_PRODUCENTA.get(f_brand)
+        
+        if dozwolone_kategorie is None:
+            # Tryb "Inne" - pokazujemy wszystko
+            kategorie = kategorie_wszystkie
+        else:
+            # Filtrujemy kategorie - bierzemy tylko te które są w mapowaniu I istnieją w cenniku
+            # case-insensitive, żeby działało jeśli ktoś w arkuszu wpisze "ppf" zamiast "PPF"
+            dozwolone_lower = [d.lower().strip() for d in dozwolone_kategorie]
+            kategorie = [k for k in kategorie_wszystkie if k.lower().strip() in dozwolone_lower]
+            
+            # Bezpiecznik: jeśli filtrowanie odrzuciło wszystko (np. w cenniku nie ma kolumny PPF),
+            # pokazujemy wszystkie kategorie z ostrzeżeniem, żeby aplikacja się nie zablokowała
+            if not kategorie:
+                st.warning(
+                    f"⚠️ Dla producenta '{f_brand}' oczekiwane kategorie to {dozwolone_kategorie}, "
+                    f"ale w cenniku ich nie ma. Pokazuję wszystkie kategorie."
+                )
+                kategorie = kategorie_wszystkie
+        
         kategoria = st.selectbox("Kategoria", kategorie)
         uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
         pakiet = st.selectbox("Usługa", uslugi_kat)
