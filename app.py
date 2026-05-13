@@ -19,14 +19,25 @@ PARENT_FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
 HANDLOWCY = {
     "Adam Trepka": {
         "stanowisko": "CEO It`s Wrap",
-        "telefon": "+48 111 222 333",
+        "telefon": "+48 505 008877",
         "email": "adam@itswrap.pl"
     },
-    "Jan Kowalski": {
-        "stanowisko": "Specjalista ds. Detailingu",
-        "telefon": "+48 444 555 666",
-        "email": "jan@itswrap.pl"
+    "Adam Homulicki": {
+        "stanowisko": "Account Manager",
+        "telefon": "+48 698433834",
+        "email": "adam.homulicki@itswrap.pl"
     }
+     "Jakub Gerber": {
+        "stanowisko": "Account Manager",
+        "telefon": "+48 606523486",
+        "email": "jakub.gerber@itswrap.pl"
+    }
+     "Daniel Heina": {
+        "stanowisko": "CEO It`s Wrap",
+        "telefon": "+48 609608400",
+        "email": "daniel@itswrap.pl"
+    }
+
 }
 
 # --- BAZA AUT I SEGMENTÓW ---
