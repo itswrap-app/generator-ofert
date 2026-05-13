@@ -26,12 +26,12 @@ HANDLOWCY = {
         "stanowisko": "Account Manager",
         "telefon": "+48 698433834",
         "email": "adam.homulicki@itswrap.pl"
-    }
+    },
      "Jakub Gerber": {
         "stanowisko": "Account Manager",
         "telefon": "+48 606523486",
         "email": "jakub.gerber@itswrap.pl"
-    }
+    },
      "Daniel Heina": {
         "stanowisko": "CEO It`s Wrap",
         "telefon": "+48 609608400",
