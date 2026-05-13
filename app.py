@@ -37,7 +37,6 @@ HANDLOWCY = {
         "telefon": "+48 609608400",
         "email": "daniel@itswrap.pl"
     }
-
 }
 
 # --- BAZA AUT I SEGMENTÓW ---
@@ -69,32 +68,222 @@ SEGMENTY_DOMYSLNE = {
     "Tesla": {"Model 3": "Segment D", "Model Y": "Segment D", "Model S": "Segment E", "Model X": "Segment J"}
 }
 
-# --- BAZA FOLII ---
+# ==========================================================================
+# BAZA FOLII - zaktualizowana na podstawie arkusza Google
+# (źródło: 1U576lt7QG75-Jezl7E3N_uv_2znzu_ykGR8CUFnOzWg)
+#
+# Format wpisu koloru: "Nazwa Polska (Kod) - Nazwa Angielska"
+# Dzięki temu handlowiec wybiera w swoim języku, ale w ofercie i prompcie
+# do AI zachowany jest pełny opis produktu z kodem (do precyzyjnej identyfikacji).
+# ==========================================================================
 FOIL_GROUPS = {
     "XPEL (Folie Ochronne PPF)": {
-        "Bezbarwne (Twój obecny kolor)": ["XPEL Ultimate Plus (Wysoki Połysk)", "XPEL Stealth (Mat/Satyna)"],
-        "XPEL Color (Zmiana Koloru PPF)": ["Black (Połysk)", "White (Połysk)", "Red (Połysk)", "Nardo Grey (Połysk)", "Miami Blue (Połysk)"]
+        "Bezbarwne (Twój obecny kolor)": [
+            "XPEL Ultimate Plus (Wysoki Połysk)",
+            "XPEL Stealth (Mat/Satyna)"
+        ],
+        "XPEL Color (Zmiana Koloru PPF)": [
+            "Black (Połysk)",
+            "White (Połysk)",
+            "Red (Połysk)",
+            "Nardo Grey (Połysk)",
+            "Miami Blue (Połysk)"
+        ]
     },
     "3M 2080 Series": {
-        "Matte (Matowe)": ["Matte Black (M12)", "Matte Deep Black (M22)", "Matte Dark Grey (M261)", "Matte White (M10)", "Matte Military Green (M26)"],
-        "Satin (Satynowe)": ["Satin Black (S12)", "Satin Dark Grey (S162)", "Satin White (S10)", "Satin Vampire Red (S208)"],
-        "Gloss (Połysk)": ["Gloss Black (G12)", "Gloss White (G10)", "Gloss Hot Rod Red (G13)", "Gloss Sky Blue (G77)"],
-        "Color Flip (Kameleon)": ["Gloss Flip Electric Wave (GP287)", "Satin Flip Volcanic Flare (SP236)"]
+        "Wysoki Połysk (High Gloss)": [
+            "Czarny Wysoki Połysk (HG12) - High Gloss Black",
+            "Czerwony Hot Rod Wysoki Połysk (HG13) - High Gloss Hot Rod Red",
+            "Palony Pomarańcz Wysoki Połysk (HG14) - High Gloss Burnt Orange",
+            "Jasnożółty Wysoki Połysk (HG15) - High Gloss Bright Yellow",
+            "Cytrynowy Wysoki Połysk (HG65) - High Gloss Citric Acid",
+            "Zielona Modliszka Wysoki Połysk (HG336) - High Gloss Mantis Green",
+            "Wojskowa Zieleń Wysoki Połysk (HG36) - High Gloss Military Green",
+            "Błękit Nieba Wysoki Połysk (HG26) - High Gloss Sky Blue",
+            "Burzowy Szary Wysoki Połysk (HG31) - High Gloss Storm Gray"
+        ],
+        "Połysk (Gloss)": [
+            "Biały Połysk (G10) - Gloss White",
+            "Czarny Połysk (G12) - Gloss Black",
+            "Czerwony Hotrod Połysk (G13) - Gloss Hotrod Red",
+            "Palony Pomarańcz Połysk (G14) - Gloss Burnt Orange",
+            "Jasnożółty Połysk (G15) - Gloss Bright Yellow",
+            "Głęboki Pomarańcz Połysk (G24) - Gloss Deep Orange",
+            "Słonecznikowy Połysk (G25) - Gloss Sunflower",
+            "Intensywny Niebieski Połysk (G47) - Gloss Intense Blue",
+            "Ognista Czerwień Połysk (G53) - Gloss Flame Red",
+            "Jasnopomarańczowy Połysk (G54) - Gloss Bright Orange",
+            "Wyrazisty Żółty Połysk (G55) - Gloss Lucid Yellow",
+            "Błękit Nieba Połysk (G77) - Gloss Sky Blue",
+            "Jasna Kość Słoniowa Połysk (G79) - Gloss Light Ivory",
+            "Ciemnoczerwony Połysk (G83) - Gloss Dark Red",
+            "Gorący Róż Połysk (G103) - Gloss Hot Pink",
+            "Niebieski Morski Połysk (G127) - Gloss Boat Blue",
+            "Antracyt Połysk (G201) - Gloss Anthracite",
+            "Czerwony Metalik Połysk (G203) - Gloss Red Metallic",
+            "Czarny Metalik Połysk (G212) - Gloss Black Metallic",
+            "Głęboki Niebieski Metalik Połysk (G217) - Gloss Deep Blue Metallic",
+            "Niebieski Metalik Połysk (G227) - Gloss Blue Metallic",
+            "Niebieski Północny Połysk (G272) - Gloss Midnight Blue",
+            "Czarny Żar Połysk (G282) - Gloss Ember Black",
+            "Czarna Róża Połysk (GP99) - Gloss Black Rose",
+            "Białe Złoto Iskrzące Połysk (GP240) - Gloss White Gold Sparkle",
+            "Galaktyczna Czerń Połysk (GP292) - Gloss Galaxy Black"
+        ],
+        "Satyna (Satin)": [
+            "Biały Satyna (S10) - Satin White",
+            "Czarny Satyna (S12) - Satin Black",
+            "Szary Okrętowy Satyna (S51) - Satin Battleship Gray",
+            "Błękit Key West Satyna (S57) - Satin Key West",
+            "Białe Aluminium Satyna (S120) - Satin White Aluminum",
+            "Zielone Jabłko Satyna (S196) - Satin Apple Green",
+            "Ciemnoszary Satyna (S261) - Satin Dark Gray",
+            "Chmura Burzowa Satyna (S271) - Satin Thundercloud",
+            "Morski Blask Satyna (S327) - Satin Ocean Shimmer",
+            "Gorzki Żółty Satyna (S335) - Satin Bitter Yellow",
+            "Idealny Niebieski Satyna (S347) - Satin Perfect Blue",
+            "Tląca się Czerwień Satyna (S363) - Satin Smoldering Red",
+            "Biała Perła Satyna (SP10) - Satin Pearl White",
+            "Kameleon Wulkaniczny Satyna (SP236) - Satin Flip Volcanic Flare",
+            "Mrożona Wanilia Satyna (SP240) - Satin Frozen Vanilla",
+            "Czarny Złoty Pył Satyna (SP242) - Satin Gold Dust Black",
+            "Wampiryczna Czerń Satyna (SP273) - Satin Vampire Red",
+            "Kameleon Widmowa Perła Satyna (SP280) - Satin Flip Ghost Pearl",
+            "Kameleon Psychodeliczny Satyna (SP281) - Satin Flip Psychedelic"
+        ],
+        "Mat (Matte)": [
+            "Biały Mat (M10) - Matte White",
+            "Czarny Mat (M12) - Matte Black",
+            "Głęboki Mat Czarny (DM12) - Dead Matte Black",
+            "Srebrny Mat (M21) - Matte Silver",
+            "Wojskowa Zieleń Mat (M26) - Matte Military Green",
+            "Indygo Mat (M27) - Matte Indigo",
+            "Czerwony Metalik Mat (M203) - Matte Red Metallic",
+            "Sosnowa Zieleń Metalik Mat (M206) - Matte Pine Green Metallic",
+            "Brązowy Metalik Mat (M209) - Matte Brown Metallic",
+            "Grafitowy Metalik Mat (M211) - Matte Charcoal Metallic",
+            "Czarny Metalik Mat (M212) - Matte Black Metallic",
+            "Niebieski Metalik Mat (M227) - Matte Blue Metallic",
+            "Szare Aluminium Mat (M230) - Matte Gray Aluminum",
+            "Ciemnoszary Mat (M261) - Matte Dark Gray"
+        ],
+        "Specjalne / Struktura": [
+            "Czarny Karbon (CFS12) - Carbon Fiber Black",
+            "Antracytowy Karbon (CFS201) - Carbon Fiber Anthracite",
+            "Szczotkowane Aluminium (BR120) - Brushed Aluminum",
+            "Szczotkowana Czerń (BR212) - Brushed Black",
+            "Szczotkowana Stal (BR201) - Brushed Steel",
+            "Srebrny Chrom Połysk (GC451) - Gloss Silver Chrome"
+        ]
     },
     "Avery Dennison SW900": {
-        "Satin": ["Satin Black", "Satin Pearl White", "Satin Carmine Red", "Satin Khaki Green", "Satin Metallic Grey"],
-        "Gloss": ["Gloss Black", "Gloss White", "Gloss Obsidian Black", "Gloss Rock Grey", "Gloss Carmine Red"],
-        "Matte": ["Matte Black", "Matte White", "Matte Charcoal Metallic", "Matte Olive Green"]
+        "Połysk (Gloss)": [
+            "Biały Połysk (SW900-101-O) - Gloss White",
+            "Śnieżna Biel Połysk (SW900-110-S) - Gloss White Snow",
+            "Czarny Połysk (SW900-190-O) - Gloss Black",
+            "Obsydianowa Czerń Połysk (SW900-191-O) - Gloss Obsidian Black",
+            "Czerwony Połysk (SW900-415-O) - Gloss Red",
+            "Kardynalska Czerwień Połysk (SW900-433-O) - Gloss Cardinal Red",
+            "Karminowa Czerwień Połysk (SW900-436-O) - Gloss Carmine Red",
+            "Żółty Połysk (SW900-235-O) - Gloss Yellow",
+            "Pomarańczowy Połysk (SW900-373-O) - Gloss Orange",
+            "Szmaragdowa Zieleń Połysk (SW900-771-O) - Gloss Emerald Green",
+            "Ciemnozielony Połysk (SW900-792-O) - Gloss Dark Green",
+            "Niebieski Połysk (SW900-677-O) - Gloss Blue",
+            "Intensywny Niebieski Połysk (SW900-667-O) - Gloss Intense Blue",
+            "Szary Połysk (SW900-832-O) - Gloss Grey",
+            "Kamienny Szary Połysk (SW900-821-O) - Gloss Rock Grey",
+            "Ciemnoszary Połysk (SW900-865-O) - Gloss Dark Grey",
+            "Imprezowy Róż Połysk (SW900-517-O) - Gloss Pool Party Pink",
+            "Złoty Metalik Połysk (SW900-215-M) - Gloss Metallic Gold",
+            "Czysta Czerwień Metalik Połysk (SW900-401-M) - Gloss Metallic Pure Red",
+            "Wibrujący Fiolet Metalik Połysk (SW900-522-M) - Gloss Metallic Vibrant Violet",
+            "Pryzmatyczny Metalik Połysk (SW900-879-M) - Gloss Metallic Pride Prismatic"
+        ],
+        "Satyna (Satin)": [
+            "Czarny Satyna (SW900-192-M) - Satin Black",
+            "Srebrny Satyna (SW900-805-M) - Satin Silver",
+            "Ciemnoszary Satyna (SW900-854-M) - Satin Dark Grey",
+            "Safari Złoto Satyna (SW900-260-M) - Satin Safari Gold",
+            "Fioletowy Satyna (SW900-566-M) - Satin Purple",
+            "Szpiegowski Szary Satyna (SW900-828-M) - Satin Spy Grey"
+        ],
+        "Mat (Matte)": [
+            "Biały Mat (SW900-102-O) - Matte White",
+            "Czarny Mat (SW900-180-O) - Matte Black",
+            "Ciemnoszary Mat (SW900-856-O) - Matte Dark Grey",
+            "Khaki Mat (SW900-711-O) - Matte Khaki Green",
+            "Stalowy Metalik Mat (SW900-840-M) - Matte Metallic Gunmetal",
+            "Grafitowy Metalik Mat (SW900-845-M) - Matte Metallic Charcoal"
+        ],
+        "Kameleony (ColorFlow)": [
+            "Miejska Dżungla (Urban Jungle) - ColorFlow Srebrny/Zielony",
+            "Ryczący Piorun (Roaring Thunder) - ColorFlow Niebieski/Czerwony",
+            "Świeża Wiosna (Fresh Spring) - ColorFlow Srebrny/Złoty",
+            "Wschodzące Słońce (Rising Sun) - ColorFlow Czerwony/Złoty",
+            "Grań Pioruna (Lightning Ridge) - ColorFlow Zielony/Fioletowy"
+        ]
+    },
+    "Arlon": {
+        "Połysk (Gloss)": [
+            "Czerwony Połysk (401) - Gloss Red",
+            "Biały Połysk (402) - Gloss White",
+            "Czarny Połysk (403) - Gloss Black",
+            "Pomarańczowy Połysk (406) - Gloss Orange",
+            "Fioletowy Metalik Połysk (407) - Gloss Purple Metallic",
+            "Niebiesko-Szary Połysk (408) - Gloss Blue Grey",
+            "Miętowy Połysk (409) - Gloss Mint",
+            "Piaskowy Brąz Połysk (410) - Gloss Sand Brown",
+            "Srebrny Metalik Połysk (411) - Gloss Silver Metallic",
+            "Szary Połysk (413) - Gloss Grey",
+            "Jagodowy Niebieski Połysk (414) - Gloss Berry Blue",
+            "Grafitowy Metalik Połysk (416) - Gloss Charcoal Metallic",
+            "Karminowa Czerwień Połysk (418) - Gloss Carmine Red",
+            "Jasnożółty Połysk (421) - Gloss Bright Yellow",
+            "Nocny Błękit Połysk (422) - Gloss Midnight Blue",
+            "Czarna Róża Metalik Połysk (424) - Gloss Black Rose Metallic",
+            "Rubinowa Czerwień Metalik Połysk (427) - Gloss Ruby Red Metallic",
+            "Elektryczna Limonka Połysk (429) - Gloss Electric Lime",
+            "Stealth Niebieski Metalik Połysk (433) - Gloss Stealth Blue Metallic"
+        ],
+        "Satyna (Satin)": [
+            "Biały Satyna (452) - Satin White",
+            "Czarny Satyna (453) - Satin Black",
+            "Grafitowy Metalik Satyna (454) - Satin Charcoal Metallic",
+            "Biała Perła Satyna (455) - Satin Pearl White",
+            "Zielona Żmija Metalik Satyna (459) - Satin Viper Green Metallic",
+            "Rajski Róż Metalik Satyna (460) - Satin Paradise Pink Metallic"
+        ],
+        "Mat (Matte)": [
+            "Czarny Mat (503) - Matte Black",
+            "Szary Mat (505) - Matte Grey",
+            "Wojskowa Zieleń Mat (506) - Matte Military Green",
+            "Aztecki Brąz Metalik Mat (508) - Matte Aztec Bronze Metallic"
+        ],
+        "Matowe Aluminium": [
+            "Matowe Aluminium Czerwone (551) - Matte Aluminium Red",
+            "Matowe Aluminium Czarna Róża (554) - Matte Aluminium Black Rose",
+            "Matowe Aluminium Niebieskie (555) - Matte Aluminium Blue",
+            "Matowe Aluminium Fioletowe (557) - Matte Aluminium Purple",
+            "Matowe Aluminium Szare (558) - Matte Aluminium Grey"
+        ]
     },
     "Oracal 970RA": {
-        "Special": ["Gloss Telegrey", "Gloss Nardo Grey Style", "Matte Nato Olive"],
-        "Metallic": ["Gloss Graphite Metallic", "Matte Anthracite Metallic", "Gloss Silver Grey"]
+        "Special": [
+            "Gloss Telegrey",
+            "Gloss Nardo Grey Style",
+            "Matte Nato Olive"
+        ],
+        "Metallic": [
+            "Gloss Graphite Metallic",
+            "Matte Anthracite Metallic",
+            "Gloss Silver Grey"
+        ]
     }
 }
 
 # ==========================================================================
 # OPIS SCENY - CIEMNY GARAŻ Z OŚWIETLENIEM LED
-# Jedno miejsce definicji żeby łatwo edytować styl wszystkich wizualizacji
 # ==========================================================================
 SCENE_DESCRIPTION = (
     "The car is photographed inside a completely dark modern detailing garage. "
@@ -106,7 +295,17 @@ SCENE_DESCRIPTION = (
     "ultra sharp focus on the car, 8k resolution, photorealistic."
 )
 
-# --- FUNKCJE SYSTEMOWE ---
+
+# --- FUNKCJE POMOCNICZE ---
+def _czysta_nazwa_folii(folia):
+    """
+    Wyciąga "ludzką" nazwę folii bez kodu w nawiasie.
+    Przykład: "Czarny Połysk (G12) - Gloss Black" → "Czarny Połysk"
+              "XPEL Ultimate Plus (Wysoki Połysk)" → "XPEL Ultimate Plus"
+    """
+    return folia.split('(')[0].strip()
+
+
 def install_fonts():
     font_src, font_dst = "fonts", os.path.expanduser("~/.local/share/fonts")
     if os.path.exists(font_src):
@@ -137,25 +336,8 @@ def _crop_to_target_ratio(img_bytes):
 
 
 def generate_ai_image(car_description, color_description, reference_images=None):
-    """
-    Generuje wizualizację auta przez Gemini 2.5 Flash Image (Nano Banana).
-    
-    car_description: opis auta (marka, model, rocznik, nadwozie) - dla trybu text-to-image
-    color_description: opis docelowego koloru/folii
-    reference_images: lista tupli [(bytes, mime_type), ...] - zdjęcia referencyjne auta
-    
-    Gdy przekazane są reference_images:
-      - Model TRAKTUJE je jako referencje geometrii/proporcji tego samego auta
-      - Zachowuje bryłę, zmienia TYLKO kolor karoserii
-      - Scenę zastępuje ciemnym garażem z LED
-    
-    Gdy NIE ma referencji:
-      - Model generuje auto od zera na podstawie opisu
-      - Scena: ciemny garaż z LED
-    """
     api_key = st.secrets["GEMINI_API_KEY"]
     
-    # Poprawny endpoint Gemini 2.5 Flash Image
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
     headers = {
         "Content-Type": "application/json",
@@ -165,11 +347,6 @@ def generate_ai_image(car_description, color_description, reference_images=None)
     parts = []
     
     if reference_images and len(reference_images) > 0:
-        # TRYB EDYCJI I2I - mamy zdjęcia referencyjne
-        # KLUCZOWE: jawnie mówimy modelowi że to wszystkie zdjęcia tego SAMEGO auta
-        # (różne ujęcia), a on ma wygenerować JEDNO nowe ujęcie w garażu z tym autem.
-        # Inaczej Nano Banana próbuje scalać zdjęcia jak fusion.
-        
         count = len(reference_images)
         if count == 1:
             ref_instruction = (
@@ -199,10 +376,8 @@ def generate_ai_image(car_description, color_description, reference_images=None)
             f"- Framing: 3/4 front view, car centered, full body visible"
         )
         
-        # Prompt tekstowy NAJPIERW
         parts.append({"text": full_prompt})
         
-        # Potem wszystkie zdjęcia referencyjne
         for img_bytes, mime_type in reference_images:
             base64_image = base64.b64encode(img_bytes).decode('utf-8')
             parts.append({
@@ -212,8 +387,6 @@ def generate_ai_image(car_description, color_description, reference_images=None)
                 }
             })
     else:
-        # TRYB GENERACJI od zera - brak referencji
-        # Wzmocniony prompt aby wymusić aktualną generację modelu
         full_prompt = (
             f"Generate a photorealistic image of the following car:\n"
             f"{car_description}\n\n"
@@ -230,7 +403,7 @@ def generate_ai_image(car_description, color_description, reference_images=None)
         "contents": [{"parts": parts}],
         "generationConfig": {
             "responseModalities": ["IMAGE"],
-            "temperature": 0.4  # Niższa temperatura = bardziej przewidywalne, mniej halucynacji
+            "temperature": 0.4
         }
     }
     
@@ -243,19 +416,16 @@ def generate_ai_image(car_description, color_description, reference_images=None)
         
         data = response.json()
         
-        # Obsługa braku kandydatów (np. blokada safety)
         if 'candidates' not in data or len(data['candidates']) == 0:
             st.error(f"API nie zwróciło obrazu. Pełna odpowiedź: {str(data)[:800]}")
             return _fallback_image()
         
         candidate = data['candidates'][0]
         
-        # Sprawdzenie czy nie było blokady
         if candidate.get('finishReason') in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST'):
             st.error(f"Generacja zablokowana przez safety filter: {candidate.get('finishReason')}")
             return _fallback_image()
         
-        # Ekstrakcja obrazu z parts (może być camelCase lub snake_case)
         content_parts = candidate.get('content', {}).get('parts', [])
         for part in content_parts:
             inline = part.get('inlineData') or part.get('inline_data')
@@ -263,7 +433,6 @@ def generate_ai_image(car_description, color_description, reference_images=None)
                 img_data = base64.b64decode(inline['data'])
                 return _crop_to_target_ratio(img_data)
         
-        # Gdy nie ma obrazu - pokazujemy co zwrócił model (często tekst z wyjaśnieniem)
         text_response = ""
         for part in content_parts:
             if part.get('text'):
@@ -281,7 +450,6 @@ def generate_ai_image(car_description, color_description, reference_images=None)
 
 
 def _fallback_image():
-    """Ciemny placeholder jeśli generacja się nie uda."""
     img_fallback = Image.new('RGB', (2100, 1870), color=(15, 15, 18))
     out_fallback = io.BytesIO()
     img_fallback.save(out_fallback, format='PNG')
@@ -289,11 +457,6 @@ def _fallback_image():
 
 
 def _zbuduj_wolacz_po_polsku(klient):
-    """
-    Zwraca poprawną formę wołacza po polsku ("Panie Piotrze", "Pani Anno", itp.).
-    Odporna na puste pole - wtedy zwraca "Szanowny Kliencie".
-    Ta logika leci przed AI bo Gemini słabo radzi sobie z polską deklinacją.
-    """
     imie_surowe = klient.split()[0] if klient.strip() != "" else ""
     if not imie_surowe:
         return "Szanowny Kliencie"
@@ -326,12 +489,6 @@ def _zbuduj_wolacz_po_polsku(klient):
 
 
 def _fallback_intro_text(wolacz, marka, czysta_folia, handlowiec_imie, handlowiec_stanowisko):
-    """
-    Awaryjny szablon - używany gdy Gemini nie odpowie.
-    UWAGA: Tekst CELOWO jest oznaczony "[WSTĘP AWARYJNY]" żeby od razu było widać
-    że generacja AI padła i trzeba to wyłapać. W produkcji jeśli to się pokaże,
-    znaczy że jest problem z API Gemini.
-    """
     marka_txt = marka if marka and marka != "Inna marka..." else "samochodu"
     tresc = (
         f"{wolacz},\n\n"
@@ -344,18 +501,10 @@ def _fallback_intro_text(wolacz, marka, czysta_folia, handlowiec_imie, handlowie
 
 
 def generate_ai_intro_text(klient, brand, model, pakiet, folia, handlowiec_imie, handlowiec_stanowisko):
-    """
-    Generuje spersonalizowany wstęp do oferty przez Gemini 2.5 Flash.
-    Ton: profesjonalny, ciepły. Długość: 3-4 zdania. Zawsze świeży tekst.
-    
-    W razie błędu API wraca do bezpiecznego szablonu fallback (oferta musi się
-    wygenerować ZAWSZE, nawet jeśli Gemini akurat nie działa).
-    """
     wolacz = _zbuduj_wolacz_po_polsku(klient)
-    czysta_folia = folia.split('(')[0].strip()
+    czysta_folia = _czysta_nazwa_folii(folia)
     marka_model = f"{brand} {model}".strip() if brand and brand != "Inna marka..." else "samochodu"
     
-    # Kontekst dla modelu - wszystko co może pomóc w personalizacji
     kontekst = (
         f"Autor wiadomości: {handlowiec_imie}, {handlowiec_stanowisko}\n"
         f"Firma: ITS WRAP (premium detailing, folie ochronne PPF, oklejanie samochodów)\n"
@@ -395,7 +544,6 @@ PRZYKŁADY DOBREGO STYLU (do inspiracji, NIE kopiuj):
 Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
     
     try:
-        # Sprawdzenie czy klucz API istnieje w sekretach
         try:
             api_key = st.secrets["GEMINI_API_KEY"]
         except KeyError:
@@ -414,12 +562,8 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "temperature": 0.9,  # wysoka -> za każdym razem świeży, unikalny tekst
-                "maxOutputTokens": 1024,  # spory zapas - thinking może jeszcze odgryzać część
-                # KLUCZOWE: wyłączamy "thinking mode" w Gemini 2.5 Flash.
-                # Bez tego model zjada nawet kilkaset tokenów na wewnętrzne myślenie,
-                # które liczy się do maxOutputTokens - efekt: odpowiedź urwana w połowie słowa.
-                # Do prostego zadania (4 zdania tekstu) myślenie jest zbędne.
+                "temperature": 0.9,
+                "maxOutputTokens": 1024,
                 "thinkingConfig": {
                     "thinkingBudget": 0
                 }
@@ -454,9 +598,6 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
         if finish_reason == 'MAX_TOKENS':
-            # Model uderzył w limit - zwykle winne są "thinking tokens" w Gemini 2.5.
-            # Mamy już thinkingBudget:0 i maxOutputTokens:1024, więc to NIE powinno się zdarzać.
-            # Jeśli jednak się zdarzy - pokazujemy ile tokenów model zużył na thinking.
             usage = data.get('usageMetadata', {})
             thoughts = usage.get('thoughtsTokenCount', 'n/a')
             output = usage.get('candidatesTokenCount', 'n/a')
@@ -482,13 +623,10 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
             )
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
-        # Sanity check - jeśli model zwrócił coś podejrzanie krótkiego, fallback
         if len(wygenerowany_tekst) < 80:
             st.warning(f"⚠️ Gemini zwrócił zbyt krótki tekst ({len(wygenerowany_tekst)} znaków): '{wygenerowany_tekst}' - używam szablonu awaryjnego.")
             return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
         
-        # Obrona przed modelem, który mimo instrukcji sam doda podpis.
-        # KLUCZOWE: szukamy fraz TYLKO na początku linii (po \n), nigdy w środku zdania.
         linie = wygenerowany_tekst.split('\n')
         frazy_podpisu_start_linii = [
             'z motoryzacyjnym', 'z poważaniem', 'z wyrazami',
@@ -499,7 +637,7 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         for linia in linie:
             linia_lower = linia.strip().lower()
             if any(linia_lower.startswith(fraza) for fraza in frazy_podpisu_start_linii):
-                break  # od tej linii w dół - to podpis, odcinamy
+                break
             linie_wynikowe.append(linia)
         
         wygenerowany_tekst = '\n'.join(linie_wynikowe).strip()
@@ -537,24 +675,52 @@ def pptx_to_pdf(input_path):
     except: return None
 
 
-# --- OBSŁUGA GOOGLE DRIVE DLA OFERT (OAuth - prywatne konto Google) ---
-# Service Accounts nie mają miejsca na Drive, więc do uploadu PDF-ów używamy
-# OAuth delegation - token odświeżający pozwala aplikacji działać w imieniu
-# prywatnego konta Google użytkownika (i zużywać jego limit 15GB).
-#
-# Konfiguracja: sekret [oauth_drive] w secrets.toml z client_id, client_secret,
-# refresh_token, token_uri (wygenerowane jednorazowo skryptem generuj_token.py).
-#
-# Service account (zmienna 'service') dalej obsługuje odczyt szablonów PPTX
-# i Google Sheets (rejestr, cennik) - bo tam problemu z miejscem nie ma.
+def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca):
+    """
+    Wybiera ostatnią stronę oferty spersonalizowaną pod konkretnego handlowca.
+    
+    Logika:
+    1. Najpierw szuka pliku zawierającego imię i nazwisko handlowca w nazwie
+       (np. "6_Oferta_ostatnia_Adam Trepka" dla wybranego "Adam Trepka").
+    2. Jeśli brak spersonalizowanej wersji - bierze pierwszy plik z prefixem "6_"
+       jako fallback ogólny.
+    3. Jeśli żadnego "6_" nie ma - zwraca None (nie dodajemy strony końcowej).
+    
+    Porównanie nazw jest case-insensitive i ignoruje znaki interpunkcyjne typu "_"/" ",
+    więc "6_Oferta_ostatnia_Adam Trepka.pptx" pasuje do handlowca "Adam Trepka".
+    """
+    def _normalizuj(tekst):
+        # ujednolicamy do małych liter, zamiana _ na spację, usuwamy podwójne spacje
+        return re.sub(r'\s+', ' ', tekst.lower().replace('_', ' ')).strip()
+    
+    imie_norm = _normalizuj(imie_handlowca)
+    pliki_6 = [f for f in pliki_na_dysku if f['name'].startswith('6')]
+    
+    # 1. Szukamy dopasowania po imieniu handlowca
+    for f in pliki_6:
+        nazwa_norm = _normalizuj(f['name'])
+        if imie_norm in nazwa_norm:
+            return f
+    
+    # 2. Fallback - ogólny plik bez imienia (np. "6_Oferta_ostatnia.pptx")
+    #    Wybieramy najkrótszy plik 6_ (zwykle ogólny ma najkrótszą nazwę)
+    pliki_ogolne = [f for f in pliki_6 if not any(
+        _normalizuj(h) in _normalizuj(f['name']) for h in HANDLOWCY.keys()
+    )]
+    if pliki_ogolne:
+        return sorted(pliki_ogolne, key=lambda x: len(x['name']))[0]
+    
+    # 3. Ostateczny fallback - pierwszy lepszy plik "6_" (gdyby coś było źle nazwane)
+    if pliki_6:
+        return pliki_6[0]
+    
+    return None
 
+
+# --- OBSŁUGA GOOGLE DRIVE DLA OFERT (OAuth) ---
 from google.oauth2.credentials import Credentials as OAuthCredentials
 
-# UWAGA: NIE używamy @st.cache_resource bo cache trzymałby unieważniony token
-# nawet po odnowieniu sekretów. Tworzenie klienta jest tanie - pomija się tylko
-# milisekundy, a zyskujemy pewność że zawsze idzie świeży request do Google.
 def get_oauth_drive_service():
-    """Tworzy klienta Drive API działającego w imieniu prywatnego konta Google."""
     try:
         oauth_conf = st.secrets["oauth_drive"]
     except KeyError:
@@ -564,14 +730,12 @@ def get_oauth_drive_service():
         )
         return None
     
-    # Walidacja - czy wszystkie 4 wartości są obecne i niepuste
     wymagane_klucze = ['client_id', 'client_secret', 'refresh_token', 'token_uri']
     brakujace = [k for k in wymagane_klucze if not oauth_conf.get(k, '').strip()]
     if brakujace:
         st.error(f"🔑 W [oauth_drive] brakuje wartości: {', '.join(brakujace)}")
         return None
     
-    # Sanity check refresh tokena - powinien zaczynać się od "1//" i mieć min 50 znaków
     rt = oauth_conf['refresh_token'].strip()
     if not rt.startswith('1//') or len(rt) < 50:
         st.error(
@@ -583,15 +747,13 @@ def get_oauth_drive_service():
     
     try:
         creds = OAuthCredentials(
-            token=None,  # zostanie odświeżony automatycznie z refresh_token
+            token=None,
             refresh_token=rt,
             token_uri=oauth_conf['token_uri'].strip(),
             client_id=oauth_conf['client_id'].strip(),
             client_secret=oauth_conf['client_secret'].strip(),
             scopes=['https://www.googleapis.com/auth/drive.file']
         )
-        # Próbujemy od razu odświeżyć - jeśli token jest unieważniony, dowiemy się TERAZ
-        # zamiast w środku uploadu PDF.
         from google.auth.transport.requests import Request as AuthRequest
         creds.refresh(AuthRequest())
         return build('drive', 'v3', credentials=creds)
@@ -614,14 +776,6 @@ def get_oauth_drive_service():
 
 
 def pobierz_lub_stworz_folder_oferty_oauth(oauth_service):
-    """
-    Szuka folderu 'Oferty ITS WRAP' w korzeniu prywatnego Drive użytkownika.
-    Tworzy go jeśli nie istnieje.
-    
-    UWAGA: scope drive.file pozwala operować TYLKO na plikach/folderach
-    stworzonych przez tę aplikację - więc nie zobaczymy ewentualnego istniejącego
-    folderu 'Oferty' stworzonego ręcznie. Dlatego używamy własnej unikalnej nazwy.
-    """
     folder_name = "Oferty ITS WRAP"
     query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     results = oauth_service.files().list(
@@ -645,7 +799,6 @@ def pobierz_lub_stworz_folder_oferty_oauth(oauth_service):
 
 
 def wgraj_pdf_na_dysk(oauth_service, folder_id, file_name, file_bytes):
-    """Upload PDF na prywatny Drive właściciela konta OAuth."""
     try:
         file_metadata = {
             'name': file_name,
@@ -658,7 +811,6 @@ def wgraj_pdf_na_dysk(oauth_service, folder_id, file_name, file_bytes):
             fields='id, webViewLink'
         ).execute()
         
-        # Uprawnienia: każdy z linkiem może otworzyć (read-only)
         oauth_service.permissions().create(
             fileId=file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
@@ -683,7 +835,6 @@ def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena,
 
 
 def replace_text_in_shape(shape, replacements):
-    """Rekurencyjnie wyszukuje i podmienia tagi tekstowe."""
     if hasattr(shape, "has_text_frame") and shape.has_text_frame:
         for p in shape.text_frame.paragraphs:
             p_text = "".join(run.text for run in p.runs)
@@ -701,7 +852,7 @@ def replace_text_in_shape(shape, replacements):
             for cell in row.cells:
                 replace_text_in_shape(cell, replacements)
                 
-    if shape.shape_type == 6:  # msoGroup
+    if shape.shape_type == 6:
         for subshape in shape.shapes:
             replace_text_in_shape(subshape, replacements)
 
@@ -715,21 +866,7 @@ st.set_page_config(
 )
 install_fonts()
 
-# ==========================================================================
-# STYL CI IT'S WRAP - zgodny z Brand Manual 2026
-# 
-# Paleta kolorów (z brand manual str. 16, 23):
-# - IT'S WRAP BLUE: #007DC5 (primary, akcenty, przyciski)
-# - IT'S WRAP NAVY BLUE: #042643 (sidebar, ciemne tło)
-# - SEMI 1-4: #003559, #004470, #005489, #0064A3 (gradienty/tła)
-# - Biel #FFFFFF, Czerń #000000
-#
-# Typografia (str. 26):
-# - URW DIN (bazowy) - font komercyjny, trudno dostępny
-# - Roboto (Google Font) - DOPUSZCZALNY ZAMIENNIK na www - używamy tego
-# ==========================================================================
-
-# Ładujemy logo (jeśli jest) - wyświetlane w sidebar
+# Ładujemy logo
 import base64 as _b64_css
 def _logo_base64(sciezka):
     try:
@@ -738,7 +875,6 @@ def _logo_base64(sciezka):
     except FileNotFoundError:
         return None
 
-# Szukamy logo w typowych lokalizacjach repo
 LOGO_PATH_CANDIDATES = ['logo.png', 'assets/logo.png', 'static/logo.png', 'images/logo.png']
 LOGO_B64 = None
 LOGO_EXT = None
@@ -754,9 +890,6 @@ st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 
 <style>
-/* ==========================================================================
-   PALETA MARKI IT'S WRAP
-   ========================================================================== */
 :root {
     --iw-blue: #007DC5;
     --iw-blue-dark: #0064A3;
@@ -771,16 +904,12 @@ st.markdown("""
     --iw-gray-text: #4A5568;
 }
 
-/* ==========================================================================
-   TYPOGRAFIA - Roboto jako font bazowy (zgodny z brand manualem)
-   ========================================================================== */
 html, body, [class*="css"], .stApp, .stMarkdown, .stText,
 .stSelectbox, .stTextInput, .stNumberInput, .stButton,
 .stRadio, .stCheckbox, .stFileUploader, .stDataFrame {
     font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
-/* Nagłówki - pogrubione, Roboto 700/900 */
 h1, h2, h3, h4, h5, h6,
 .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
     font-family: 'Roboto', sans-serif !important;
@@ -789,7 +918,6 @@ h1, h2, h3, h4, h5, h6,
     color: var(--iw-navy) !important;
 }
 
-/* H1 jak tytuły sekcji w brand manualu - uppercase, w niebieskim */
 h1, .stMarkdown h1 {
     color: var(--iw-blue) !important;
     text-transform: uppercase;
@@ -800,9 +928,6 @@ h1, .stMarkdown h1 {
     margin-bottom: 24px;
 }
 
-/* ==========================================================================
-   GŁÓWNY PANEL - jasne tło (papier firmowy)
-   ========================================================================== */
 .stApp {
     background-color: var(--iw-white);
 }
@@ -813,9 +938,6 @@ h1, .stMarkdown h1 {
     max-width: 1400px;
 }
 
-/* ==========================================================================
-   SIDEBAR - ciemny navy (inspirowany belką mailową w CI)
-   ========================================================================== */
 section[data-testid="stSidebar"] {
     background-color: var(--iw-navy) !important;
     border-right: 4px solid var(--iw-blue);
@@ -840,13 +962,11 @@ section[data-testid="stSidebar"] .stMarkdown h2 {
     margin-top: 16px;
 }
 
-/* Separator w sidebarze - subtelna kreska w blue */
 section[data-testid="stSidebar"] hr {
     border-color: rgba(0, 125, 197, 0.3) !important;
     margin: 1.5rem 0 !important;
 }
 
-/* Kontrolki w sidebarze - ciemne pola z niebieskim borderem */
 section[data-testid="stSidebar"] input,
 section[data-testid="stSidebar"] select,
 section[data-testid="stSidebar"] textarea,
@@ -868,7 +988,6 @@ section[data-testid="stSidebar"] label {
     font-weight: 500 !important;
 }
 
-/* File uploader w sidebarze */
 section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"] {
     background-color: var(--iw-navy-light) !important;
     border: 2px dashed rgba(0, 125, 197, 0.5) !important;
@@ -879,9 +998,6 @@ section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
     background-color: var(--iw-navy-lighter) !important;
 }
 
-/* ==========================================================================
-   PRZYCISKI - w kolorze IT'S WRAP BLUE
-   ========================================================================== */
 .stButton > button {
     background-color: var(--iw-blue) !important;
     color: var(--iw-white) !important;
@@ -907,7 +1023,6 @@ section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
     box-shadow: 0 2px 4px rgba(4, 38, 67, 0.15);
 }
 
-/* Primary button (oznaczony type="primary") - pełna bryła blue z intensywniejszym hover */
 .stButton > button[kind="primary"] {
     background-color: var(--iw-blue) !important;
     font-weight: 900 !important;
@@ -918,7 +1033,6 @@ section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
     background-color: var(--iw-navy) !important;
 }
 
-/* Download button */
 .stDownloadButton > button {
     background-color: var(--iw-navy) !important;
     color: var(--iw-white) !important;
@@ -932,9 +1046,6 @@ section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
     border-color: var(--iw-blue) !important;
 }
 
-/* ==========================================================================
-   POLA TEKSTOWE W GŁÓWNYM PANELU
-   ========================================================================== */
 .main input, .main select, .main textarea,
 .main [data-baseweb="select"] > div,
 .main [data-baseweb="input"] {
@@ -950,9 +1061,6 @@ section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
     box-shadow: 0 0 0 2px rgba(0, 125, 197, 0.15) !important;
 }
 
-/* ==========================================================================
-   ZAKŁADKI (TABS)
-   ========================================================================== */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0;
     border-bottom: 2px solid var(--iw-gray-border);
@@ -977,45 +1085,33 @@ section[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
     margin-bottom: -2px;
 }
 
-/* ==========================================================================
-   ALERTY / KOMUNIKATY - spójne z paletą marki
-   ========================================================================== */
 div[data-testid="stAlert"] {
     border-radius: 4px !important;
     border-left-width: 4px !important;
 }
 
-/* INFO - niebieski akcent */
 div[data-baseweb="notification"][kind="info"],
 div[data-testid="stAlert"][class*="info"] {
     background-color: rgba(0, 125, 197, 0.08) !important;
     border-left-color: var(--iw-blue) !important;
 }
 
-/* SUCCESS - spójna zieleń brand-adjacent */
 div[data-testid="stAlert"][class*="success"] {
     background-color: rgba(34, 139, 89, 0.08) !important;
     border-left-color: #228B59 !important;
 }
 
-/* ==========================================================================
-   PODGLĄD WIZUALIZACJI - subtelna ramka
-   ========================================================================== */
 .main [data-testid="stImage"] img {
     border-radius: 4px;
     border: 1px solid var(--iw-gray-border);
     box-shadow: 0 4px 16px rgba(4, 38, 67, 0.08);
 }
 
-/* ==========================================================================
-   DATA EDITOR / TABELE REJESTRU
-   ========================================================================== */
 [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
     border: 1px solid var(--iw-gray-border) !important;
     border-radius: 4px !important;
 }
 
-/* Nagłówki tabel */
 [data-testid="stDataFrame"] thead th,
 [data-testid="stDataEditor"] thead th {
     background-color: var(--iw-navy) !important;
@@ -1026,9 +1122,6 @@ div[data-testid="stAlert"][class*="success"] {
     letter-spacing: 0.02em;
 }
 
-/* ==========================================================================
-   STOPKA / DOPISKI
-   ========================================================================== */
 .iw-footer {
     margin-top: 3rem;
     padding: 1.5rem 0;
@@ -1045,9 +1138,6 @@ div[data-testid="stAlert"][class*="success"] {
     font-weight: 900;
 }
 
-/* ==========================================================================
-   NAGŁÓWEK W SIDEBARZE - logo + pasek
-   ========================================================================== */
 .iw-sidebar-logo {
     text-align: center;
     padding: 1rem 0.5rem 1.5rem 0.5rem;
@@ -1070,9 +1160,6 @@ div[data-testid="stAlert"][class*="success"] {
     margin-top: 0.5rem;
 }
 
-/* ==========================================================================
-   NAGŁÓWEK GŁÓWNEGO PANELU - styl jak strona tytułowa brand manualu
-   ========================================================================== */
 .iw-main-header {
     display: flex;
     align-items: center;
@@ -1107,7 +1194,6 @@ div[data-testid="stAlert"][class*="success"] {
     margin-top: 6px;
 }
 
-/* Hide default Streamlit branding for cleaner look */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header[data-testid="stHeader"] {
@@ -1139,7 +1225,6 @@ except Exception as e:
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
-    # --- NAGŁÓWEK SIDEBARA: LOGO IT'S WRAP + CLAIM ---
     if LOGO_B64:
         st.markdown(f"""
         <div class="iw-sidebar-logo">
@@ -1148,7 +1233,6 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
     else:
-        # Fallback tekstowy jeśli logo nie zostało wgrane do repo
         st.markdown("""
         <div class="iw-sidebar-logo">
             <div style="font-size: 1.5rem; font-weight: 900; letter-spacing: 0.05em; color: #FFFFFF;">
@@ -1205,21 +1289,22 @@ with st.sidebar:
         accept_multiple_files=True
     )
     
-    # Pole URL - alternatywa dla uploadu (np. prosto z konfiguratora producenta)
     url_zdjecia = st.text_input(
         "...lub wklej URL zdjęcia (np. z konfiguratora)",
         help="Bezpośredni link do obrazka .jpg/.png ze strony producenta"
     )
 
     if st.button("🪄 GENERUJ WIZUALIZACJĘ AI", type="primary"):
-        # --- BUDOWA OPISU AUTA (car_description) ---
         extra_code = f" ({gen_code})" if gen_code else ""
         car_description = (
             f"{year} {final_brand} {final_model}{extra_code}, body type: {body}. "
             f"This is a {segment_final.replace('Segment ', 'segment ')} vehicle."
         )
         
-        # --- BUDOWA OPISU KOLORU (color_description) ---
+        # Opis koloru dla AI - bierzemy "czystą" nazwę bez kodu w nawiasie
+        # (kod jak G12 jest niepotrzebny dla modelu obrazowego)
+        czysta_nazwa_koloru = _czysta_nazwa_folii(f_color)
+        
         if "Bezbarwne" in f_cat:
             if "Stealth" in f_color:
                 color_description = (
@@ -1232,19 +1317,16 @@ with st.sidebar:
                     f"(XPEL Ultimate Plus) giving the paint extra depth and shine"
                 )
         else:
-            color_description = f"{f_color} vinyl wrap by {f_brand}"
+            color_description = f"{czysta_nazwa_koloru} vinyl wrap by {f_brand}"
         
-        # --- ZEBRANIE ZDJĘĆ REFERENCYJNYCH ---
         reference_images = []
         
-        # Z uploadu
         if uploaded_files:
             for uf in uploaded_files:
                 img_bytes = uf.read()
                 mime = uf.type if uf.type else "image/jpeg"
                 reference_images.append((img_bytes, mime))
         
-        # Z URL (jeśli nie ma uploadu ale jest URL)
         if url_zdjecia and url_zdjecia.strip():
             try:
                 resp = requests.get(url_zdjecia.strip(), timeout=15, headers={
@@ -1261,7 +1343,6 @@ with st.sidebar:
             except Exception as e:
                 st.warning(f"Nie udało się pobrać zdjęcia z URL: {e}")
         
-        # --- KOMUNIKATY DLA UŻYTKOWNIKA ---
         if reference_images:
             st.info(f"🎯 Tryb edycji: używam {len(reference_images)} zdjęcia/zdjęć referencyjnych auta.")
         else:
@@ -1286,7 +1367,6 @@ with st.sidebar:
 tab_kreator, tab_rejestr = st.tabs(["⚙️ Kreator Ofert", "📋 Ewidencja (Rejestr)"])
 
 with tab_kreator:
-    # Nagłówek w stylu okładek brand manualu
     st.markdown("""
     <div class="iw-main-header">
         <div class="iw-main-header-text">
@@ -1333,13 +1413,13 @@ with tab_kreator:
         else:
             st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
-    # --- GENEROWANIE OFERTY ---
     if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
         if 'ai_img' not in st.session_state:
             st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
         else:
             with st.spinner("Składam profesjonalny PDF i wgrywam na Dysk Google..."):
                 writer = PdfWriter()
+                # W ofercie pokazujemy pełną nazwę koloru z kodem - klient widzi co konkretnie kupuje
                 final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
                 
                 dane_handlowca = HANDLOWCY[wybrany_handlowiec]
@@ -1388,7 +1468,10 @@ with tab_kreator:
                 if not zakres: 
                     zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
 
-                koniec = next((f for f in pliki_na_dysku if f['name'].startswith('6')), None)
+                # NOWE: ostatnia strona spersonalizowana pod handlowca
+                # Plik z prefixem "6_" i imieniem handlowca w nazwie (np. "6_Oferta_ostatnia_Adam Trepka")
+                # Fallback: pierwszy ogólny plik "6_" gdy spersonalizowanej wersji nie ma
+                koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec)
 
                 seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
                 seq = [f for f in seq if f]
@@ -1415,7 +1498,6 @@ with tab_kreator:
                 final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
                 nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
                 
-                # Upload PDF na prywatny Drive użytkownika (OAuth, nie service account)
                 oauth_drive = get_oauth_drive_service()
                 if oauth_drive:
                     folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
@@ -1472,7 +1554,6 @@ with tab_rejestr:
     except Exception as e:
         st.warning(f"Brak możliwości wczytania rejestru. Pamiętaj, by w nagłówkach bazy (Arkusz 'Rejestr', 1 wiersz) dodać kolumnę na link do PDF. Błąd: {e}")
 
-# --- STOPKA ---
 st.markdown("""
 <div class="iw-footer">
     <strong>IT'S WRAP</strong> · ONDRE.PL · Rynek Śródecki 4, 61-126 Poznań · +48 602 494 133
