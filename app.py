@@ -1537,7 +1537,23 @@ with tab_kreator:
                 final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
                 
                 dane_handlowca = HANDLOWCY[wybrany_handlowiec]
-                wygenerowany_wstep = generate_ai_intro_text(klient, final_brand, final_model, pakiet, final_foil_text, wybrany_handlowiec, dane_handlowca["stanowisko"])
+                
+                # WAŻNE: Wstęp na drugiej stronie oferty (wypowiedź właściciela)
+                # jest ZAWSZE od Adama Trepki jako CEO It`s Wrap, niezależnie kto
+                # operacyjnie przygotowuje ofertę. To strategiczna decyzja - klient
+                # dostaje "powitanie od szefa", a wybrany handlowiec dalej widnieje
+                # jako kontaktowa osoba do bieżącej obsługi (telefon/email niżej w ofercie).
+                AUTOR_WSTEPU_IMIE = "Adam Trepka"
+                if AUTOR_WSTEPU_IMIE in HANDLOWCY:
+                    AUTOR_WSTEPU_STANOWISKO = HANDLOWCY[AUTOR_WSTEPU_IMIE]["stanowisko"]
+                else:
+                    # Fallback gdyby Adam Trepka został usunięty/przemianowany w słowniku
+                    AUTOR_WSTEPU_STANOWISKO = "CEO It`s Wrap"
+                
+                wygenerowany_wstep = generate_ai_intro_text(
+                    klient, final_brand, final_model, pakiet, final_foil_text,
+                    AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO
+                )
 
                 cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
                 cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
