@@ -534,25 +534,67 @@ def _fallback_image():
     return out_fallback.getvalue()
 
 
-def _zbuduj_wolacz_po_polsku(klient):
-    imie_surowe = klient.split()[0] if klient.strip() != "" else ""
-    if not imie_surowe:
+def _wolacz_regulowy_fallback(imie):
+    """
+    Awaryjny generator wołacza działający OFFLINE bez AI.
+    Używany gdy Gemini API nie odpowie. Nie jest idealny, ale lepszy niż mianownik.
+    
+    Polska gramatyka wołacza - skrót zasad:
+    - Damskie na -a -> -o (Anna -> Anno, Maria -> Mario, Małgorzata -> Małgorzato)
+    - Damskie na -ia -> -io (Julia -> Julio, Natalia -> Natalio)
+    - Damskie na -ja -> -jo (Maja -> Majo)
+    - Damskie obce/spółgłoskowe (Carmen, Beatrice, Karin) -> Pani [mianownik]
+    - Męskie na -ek/-eć -> obcina się "e" (Marek->Marku, Wojciech->Wojciechu)
+    - Męskie na twardą spółgłoskę -> +ie (Jan->Janie, Tomasz->Tomaszu)
+    - Itd.
+    """
+    if not imie:
         return "Szanowny Kliencie"
     
-    imie = imie_surowe.title()
     imie_lower = imie.lower()
     
+    # ========== ŻEŃSKIE ==========
+    # Imiona kończące się na -a, -ia (najczęstsze polskie damskie)
     if imie_lower.endswith('a'):
+        # Wyjątki nieregularne
+        wyjatki_damskie = {
+            "barbara": "Barbaro", "ewa": "Ewo", "anna": "Anno",
+            "maria": "Mario", "joanna": "Joanno", "magdalena": "Magdaleno",
+            "agnieszka": "Agnieszko", "katarzyna": "Katarzyno",
+            "małgorzata": "Małgorzato", "monika": "Moniko", "natalia": "Natalio",
+            "julia": "Julio", "alicja": "Alicjo", "dorota": "Doroto",
+            "renata": "Renato", "izabela": "Izabelo", "iwona": "Iwono",
+            "beata": "Beato", "marta": "Marto", "paulina": "Paulino",
+            "patrycja": "Patrycjo", "karolina": "Karolino", "weronika": "Weroniko",
+            "aleksandra": "Aleksandro", "ola": "Olu", "kasia": "Kasiu",
+            "asia": "Asiu", "basia": "Basiu", "ania": "Aniu"
+        }
+        if imie_lower in wyjatki_damskie:
+            return f"Pani {wyjatki_damskie[imie_lower]}"
+        # Reguła ogólna - damskie na -a → -o
+        return f"Pani {imie[:-1]}o"
+    
+    # Damskie spółgłoskowe / obce (Carmen, Beatrice, Karin, Joy) - bez deklinacji
+    damskie_konsonant = {"carmen", "beatrice", "karin", "joy", "ines", "doris", "ingrid"}
+    if imie_lower in damskie_konsonant:
         return f"Pani {imie}"
     
-    wyjatki = {
+    # ========== MĘSKIE ==========
+    wyjatki_meskie = {
         "piotr": "Piotrze", "paweł": "Pawle", "kacper": "Kacprze",
         "marek": "Marku", "michał": "Michale", "donald": "Donaldzie",
-        "konrad": "Konradzie", "dawid": "Dawidzie"
+        "konrad": "Konradzie", "dawid": "Dawidzie", "jakub": "Jakubie",
+        "tomasz": "Tomaszu", "łukasz": "Łukaszu", "mateusz": "Mateuszu",
+        "krzysztof": "Krzysztofie", "andrzej": "Andrzeju", "jerzy": "Jerzy",
+        "wojciech": "Wojciechu", "stanisław": "Stanisławie", "władysław": "Władysławie",
+        "mieczysław": "Mieczysławie", "kazimierz": "Kazimierzu",
+        "robert": "Robercie", "norbert": "Norbercie", "hubert": "Hubercie",
+        "albert": "Albercie", "kuba": "Kubo"  # zdrobnienie od Jakub
     }
-    if imie_lower in wyjatki:
-        return f"Panie {wyjatki[imie_lower]}"
+    if imie_lower in wyjatki_meskie:
+        return f"Panie {wyjatki_meskie[imie_lower]}"
     
+    # Reguły końcówek
     if imie_lower.endswith('d'):
         return f"Panie {imie}zie"
     if imie_lower.endswith(('k', 'g', 'ch', 'j', 'sz', 'cz', 'rz', 'l', 'c')):
@@ -564,6 +606,95 @@ def _zbuduj_wolacz_po_polsku(klient):
     if imie_lower.endswith('r'):
         return f"Panie {imie}ze"
     return f"Panie {imie}"
+
+
+def _zbuduj_wolacz_po_polsku(klient):
+    """
+    Buduje poprawną formę wołacza w języku polskim.
+    
+    Strategia:
+    1. Próbuje przez Gemini AI - dla każdej zmienności językowej.
+    2. Jeśli AI nie działa, używa fallbacku regułowego (offline słownik + reguły).
+    
+    AI dostaje ścisły, ograniczony prompt - musi zwrócić TYLKO gotowy wołacz,
+    bez komentarzy. Walidacja po odpowiedzi sprawdza czy zaczyna się od "Pan"
+    lub "Pani" - inaczej leci fallback.
+    """
+    imie_surowe = klient.split()[0] if klient.strip() != "" else ""
+    if not imie_surowe:
+        return "Szanowny Kliencie"
+    
+    imie = imie_surowe.title()
+    
+    # Próba przez AI
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        # Brak klucza - od razu fallback
+        return _wolacz_regulowy_fallback(imie)
+    
+    prompt = (
+        f"Zwróć poprawną polską formę wołacza dla imienia: {imie}\n\n"
+        "Zasady:\n"
+        "- Format wyjścia DOKŁADNIE: 'Panie X' (dla mężczyzny) lub 'Pani X' (dla kobiety), gdzie X to imię w wołaczu.\n"
+        "- Przykłady poprawnych odmian:\n"
+        "  Piotr → Panie Piotrze\n"
+        "  Anna → Pani Anno\n"
+        "  Maria → Pani Mario\n"
+        "  Małgorzata → Pani Małgorzato\n"
+        "  Julia → Pani Julio\n"
+        "  Paweł → Panie Pawle\n"
+        "  Marek → Panie Marku\n"
+        "  Jakub → Panie Jakubie\n"
+        "  Carmen → Pani Carmen (obce, bez deklinacji)\n"
+        "  Quentin → Panie Quentin (obce, bez deklinacji)\n"
+        "- Jeśli imię obce niedeklinowalne po polsku - zostaw w mianowniku.\n"
+        "- Odpowiedz WYŁĄCZNIE samym wołaczem (np. 'Panie Piotrze'), bez cudzysłowów, bez kropki, bez komentarzy, bez wyjaśnień.\n\n"
+        f"Wołacz dla '{imie}':"
+    )
+    
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.0,  # zerowa - chcemy deterministycznej, poprawnej odmiany
+                "maxOutputTokens": 32,
+                "thinkingConfig": {"thinkingBudget": 0}
+            }
+        }
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            json=payload,
+            timeout=10
+        )
+        if response.status_code != 200:
+            return _wolacz_regulowy_fallback(imie)
+        
+        data = response.json()
+        candidates = data.get('candidates', [])
+        if not candidates:
+            return _wolacz_regulowy_fallback(imie)
+        
+        parts = candidates[0].get('content', {}).get('parts', [])
+        odpowiedz = ""
+        for p in parts:
+            if p.get('text'):
+                odpowiedz += p['text']
+        odpowiedz = odpowiedz.strip().strip('"\'.,!?:;')
+        
+        # Walidacja - musi zaczynać się od Pan/Pani i mieć sensowną długość
+        if not odpowiedz or len(odpowiedz) > 50:
+            return _wolacz_regulowy_fallback(imie)
+        if not (odpowiedz.startswith("Panie ") or odpowiedz.startswith("Pani ")):
+            return _wolacz_regulowy_fallback(imie)
+        
+        return odpowiedz
+        
+    except Exception:
+        # Każdy błąd (timeout, sieć, parsing) -> regułowy fallback
+        return _wolacz_regulowy_fallback(imie)
 
 
 def _fallback_intro_text(wolacz, marka, czysta_folia, handlowiec_imie, handlowiec_stanowisko):
