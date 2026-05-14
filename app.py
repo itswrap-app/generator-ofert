@@ -268,6 +268,57 @@ FOIL_GROUPS = {
             "Matowe Aluminium Szare (558) - Matte Aluminium Grey"
         ]
     },
+    "PWF (Platinum Wrapping Film)": {
+        # Standard Line - dostępna ogólnie u dystrybutorów, klasyczne kolory
+        "Standard Line - Mat (Matt)": [
+            "Czarny Mat - Matt Black",
+            "Biały Mat - Matt White",
+            "Antracytowy Mat - Matt Anthracite",
+            "Ciemnoszary Mat - Matt Dark Grey",
+            "Wojskowa Zieleń Mat - Matt Military Green",
+            "Niebieski Mat - Matt Blue",
+            "Czerwony Mat - Matt Red"
+        ],
+        "Standard Line - Połysk (Gloss)": [
+            "Czarny Połysk - Gloss Black",
+            "Biały Połysk - Gloss White",
+            "Czerwony Połysk - Gloss Red",
+            "Niebieski Połysk - Gloss Blue",
+            "Żółty Połysk - Gloss Yellow",
+            "Pomarańczowy Połysk - Gloss Orange",
+            "Zielony Połysk - Gloss Green"
+        ],
+        # Exclusive Line - flagowe, charakterystyczne kolory PWF (efekty metalik)
+        "Exclusive Line - Mat Metalik": [
+            "Mat Midnight Purple (Północny Fiolet) - Matt Midnight Purple",
+            "Mat Phantom Gold (Widmowe Złoto) - Matt Phantom Gold",
+            "Mat Frozen Bronze (Mrożony Brąz) - Matt Frozen Bronze",
+            "Mat Smaragd (Szmaragd) - Matt Smaragd",
+            "Mat Caribbean Mint (Karaibska Mięta) - Matt Caribbean Mint",
+            "Mat Verdoro Green (Zieleń Verdoro) - Matt Verdoro Green",
+            "Mat Tizzy Teal (Turkus Tizzy) - Matt Tizzy Teal",
+            "Mat Galactic Beam (Galaktyczna Wiązka) - Matt Galactic Beam",
+            "Mat Krypton Green (Zieleń Kryptonu) - Matt Krypton Green",
+            "Mat Obsidian Black (Czarny Obsydian) - Matt Obsidian Black",
+            "Mat Anodized Red (Anodowana Czerwień) - Matt Anodized Red",
+            "Mat Anodized Blue (Anodowany Błękit) - Matt Anodized Blue",
+            "Mat Ruby Red (Rubinowa Czerwień) - Matt Ruby Red"
+        ],
+        # Limited Edition - serie limitowane z numerem rolki (trofeum)
+        "Limited Edition (numerowana seria)": [
+            "Mat Royal Rose [LE] - Matt Royal Rose Limited Edition",
+            "Limited Edition - inny kolor (sprawdź dostępność u PWF)"
+        ],
+        # Performance - nowa linia 2025: poliuretan, łączy PPF z kolorem
+        "PWF Performance (PPF + kolor)": [
+            "Performance - Gloss Black (PPF kolorowy)",
+            "Performance - Gloss White (PPF kolorowy)",
+            "Performance - Gloss Red (PPF kolorowy)",
+            "Performance - Matt Black (PPF kolorowy)",
+            "Performance - Matt Anthracite (PPF kolorowy)",
+            "Performance - inny kolor z linii (20 kolorów)"
+        ]
+    },
     "Oracal 970RA": {
         "Special": [
             "Gloss Telegrey",
@@ -301,6 +352,11 @@ KATEGORIE_DLA_PRODUCENTA = {
     "Avery Dennison SW900": ["Zmiana koloru"],
     "Arlon": ["Zmiana koloru"],
     "Oracal 970RA": ["Zmiana koloru"],
+    # PWF ma dwie linie produktowe:
+    # - Standard/Exclusive/Limited Edition -> klasyczny wrap winylowy (Zmiana koloru)
+    # - PWF Performance (od 2025) -> polyurethane łączący PPF z kolorem -> PPF
+    # Domyślnie dostępne obie kategorie, klient wybiera w cenniku co pasuje.
+    "PWF (Platinum Wrapping Film)": ["Zmiana koloru", "PPF"],
     "Inne (wpisz ręcznie)": None,  # None = brak filtra, wszystkie kategorie dostępne
 }
 
@@ -1503,20 +1559,81 @@ with tab_kreator:
                 okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
                 wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
                 
-                produkt = None
-                if "reklam" in pakiet.lower():
-                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'reklama' in f['name'].lower()), None)
-                elif f_brand == "3M 2080 Series":
-                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and '3m' in f['name'].lower() and 'kolor' in f['name'].lower()), None)
-                elif "Ultimate" in f_color: 
-                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'ultimate' in f['name'].lower()), None)
-                elif "Stealth" in f_color: 
-                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'stealth' in f['name'].lower()), None)
-                elif "Color" in f_cat: 
-                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2') and 'color' in f['name'].lower()), None)
+                # ==========================================================
+                # DOPASOWANIE SZABLONU PRODUKTOWEGO (slajd z opisem folii)
+                # ==========================================================
+                # Nazwy plików w nowym formacie zaczynają się od daty:
+                # - 20251209_PPF_kolor_XPEL      -> XPEL Color (PPF kolorowy)
+                # - 20251209_PPF_XPELStealth     -> XPEL Stealth (mat/satyna PPF)
+                # - 20251209_PPF_XPELUltimate    -> XPEL Ultimate Plus (połysk PPF)
+                # - 20251209_PPF_XPELXtreme      -> XPEL Xtreme (premium PPF)
+                # - 20260313_Zmiana koloru_3M    -> 3M wrap
+                # - 20260313_Zmiana koloru_AVERY -> Avery wrap
+                # - 20260313_Zmiana koloru_ORACLE-> Oracal wrap (w nazwie pliku "Oracle")
+                # - 20260430_Zmiana koloru_PWF   -> PWF wrap
+                #
+                # Wzorzec wyszukiwania: case-insensitive po słowie kluczowym
+                # w nazwie pliku, bez polegania na startswith('2_').
                 
-                if not produkt: 
-                    produkt = next((f for f in pliki_na_dysku if f['name'].startswith('2')), None)
+                def znajdz_szablon(slowo_klucz, dodatkowe_filtry=None):
+                    """Szuka pliku zawierającego dane słowo (case-insensitive).
+                    dodatkowe_filtry: lista dodatkowych słów, które TEŻ muszą być w nazwie."""
+                    for f in pliki_na_dysku:
+                        nazwa_lower = f['name'].lower()
+                        if slowo_klucz.lower() in nazwa_lower:
+                            if dodatkowe_filtry:
+                                if all(filt.lower() in nazwa_lower for filt in dodatkowe_filtry):
+                                    return f
+                            else:
+                                return f
+                    return None
+                
+                produkt = None
+                
+                # Priorytet 1: oferta reklamowa (pakiet o nazwie "reklama")
+                if "reklam" in pakiet.lower():
+                    produkt = znajdz_szablon('reklama')
+                # Priorytet 2: producent folii - mapowanie na słowo w nazwie pliku
+                elif f_brand == "3M 2080 Series":
+                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['3m'])
+                elif f_brand == "Avery Dennison SW900":
+                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['avery'])
+                elif f_brand == "Oracal 970RA":
+                    # W nazwie pliku jest "ORACLE" (typo z pliku), więc szukamy obu wariantów
+                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['oracle']) or \
+                              znajdz_szablon('zmiana koloru', dodatkowe_filtry=['oracal'])
+                elif f_brand == "Arlon":
+                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['arlon'])
+                elif f_brand == "PWF (Platinum Wrapping Film)":
+                    # PWF Performance to PPF, reszta linii to wrap kolorowy
+                    if "Performance" in f_cat:
+                        # Linia Performance łączy PPF z kolorem - jeśli mamy dedykowany szablon, użyj
+                        produkt = znajdz_szablon('ppf', dodatkowe_filtry=['pwf']) or \
+                                  znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
+                    else:
+                        produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
+                # Priorytet 3: XPEL - rozróżnienie po linii produktowej
+                elif f_brand == "XPEL (Folie Ochronne PPF)":
+                    if "Ultimate" in f_color:
+                        produkt = znajdz_szablon('xpelultimate') or znajdz_szablon('ultimate')
+                    elif "Stealth" in f_color:
+                        produkt = znajdz_szablon('xpelstealth') or znajdz_szablon('stealth')
+                    elif "Xtreme" in f_color:
+                        produkt = znajdz_szablon('xpelxtreme') or znajdz_szablon('xtreme')
+                    elif "Color" in f_cat:
+                        # XPEL Color - kolorowy PPF
+                        produkt = znajdz_szablon('ppf_kolor') or znajdz_szablon('xpel', dodatkowe_filtry=['kolor'])
+                    else:
+                        # Ogólny XPEL jeśli nie wpadł w żadną kategorię
+                        produkt = znajdz_szablon('xpel')
+                
+                # Fallback: znajdź dowolny szablon zaczynający się od 2_ (stara konwencja)
+                # lub zawierający "PPF" / "Zmiana koloru" w nazwie (nowa konwencja)
+                if not produkt:
+                    produkt = next((f for f in pliki_na_dysku 
+                                    if f['name'].startswith('2_') 
+                                    or 'ppf' in f['name'].lower() 
+                                    or 'zmiana koloru' in f['name'].lower()), None)
                 
                 if rabat > 0: 
                     zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
