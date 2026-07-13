@@ -1163,6 +1163,60 @@ def pipedrive_pobierz_etapy(token, pipeline_id):
     return []
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def pipedrive_szukaj_osoby(token, fraza):
+    """
+    (v2.6) Wyszukuje osoby w Pipedrive po nazwie i dociąga ich szczegóły
+    (email, telefon, organizacja). Wynik jest cache'owany, więc wpisywanie
+    klienta NIE zasypuje Pipedrive zapytaniami.
+    Zwraca listę: [{"id", "name", "email", "telefon", "organizacja"}, ...]
+    """
+    fraza = str(fraza).strip()
+    if len(fraza) < 2:
+        return []
+    try:
+        r = requests.get(f"{PIPEDRIVE_API}/persons/search",
+                         params={"term": fraza, "api_token": token,
+                                 "fields": "name", "limit": 5},
+                         timeout=15)
+        if not (r.ok and r.json().get("success")):
+            return []
+        items = (r.json().get("data") or {}).get("items") or []
+        wynik = []
+        for it in items[:3]:  # szczegóły dociągamy dla max 3 trafień
+            p = it.get("item") or {}
+            pid = p.get("id")
+            if not pid:
+                continue
+            rekord = {"id": pid, "name": p.get("name", ""),
+                      "email": "", "telefon": "", "organizacja": ""}
+            _org = p.get("organization")
+            if isinstance(_org, dict):
+                rekord["organizacja"] = _org.get("name", "") or ""
+            try:
+                d = requests.get(f"{PIPEDRIVE_API}/persons/{pid}",
+                                 params={"api_token": token}, timeout=15)
+                if d.ok and d.json().get("success"):
+                    dd = d.json().get("data") or {}
+                    _emaile = dd.get("email") or []
+                    _tele = dd.get("phone") or []
+                    if isinstance(_emaile, list):
+                        rekord["email"] = next((e.get("value") for e in _emaile
+                                                if isinstance(e, dict) and e.get("value")), "") or ""
+                    if isinstance(_tele, list):
+                        rekord["telefon"] = next((t.get("value") for t in _tele
+                                                  if isinstance(t, dict) and t.get("value")), "") or ""
+                    _oid = dd.get("org_id")
+                    if isinstance(_oid, dict):
+                        rekord["organizacja"] = _oid.get("name", "") or rekord["organizacja"]
+            except Exception:
+                pass
+            wynik.append(rekord)
+        return wynik
+    except Exception:
+        return []
+
+
 def pipedrive_zalacz_pdf(token, deal_id, file_bytes, file_name):
     """Fizycznie załącza plik PDF do szansy sprzedaży."""
     try:
@@ -1867,6 +1921,11 @@ with st.sidebar:
     # wszyscy widzą pełny rejestr (dokładnie jak w starej wersji aplikacji).
     jest_adminem = (not HANDLOWCY_Z_ARKUSZA) or dane_handlowca_biezacego.get("rola", "handlowiec") == "admin"
 
+    # (v2.6) Token Pipedrive bieżącego handlowca - używany przy polu klienta
+    # (wyszukiwanie osoby) oraz przy dodawaniu szansy sprzedaży.
+    _pd_token = dane_handlowca_biezacego.get("pipedrive_token", "")
+    _pd_dostepny = bool(_pd_token)
+
     # (v2) Prosty system logowania PIN.
     # Aktywuje się TYLKO, gdy handlowiec ma ustawiony PIN w zakładce "Handlowcy".
     # Puste pole PIN w arkuszu = brak logowania (zachowanie jak dotychczas).
@@ -2077,6 +2136,26 @@ with tab_kreator:
                     f"Jeśli chcesz kontynuować tamtą ofertę, wczytaj ją w zakładce Ewidencja."
                 )
 
+        # (v2.6) Wyszukiwanie klienta w PIPEDRIVE - żeby nie dublować osób.
+        # Jeśli osoba istnieje, jej dane (email/telefon/firma) zapisują się
+        # w danych oferty, a szansa sprzedaży powiąże się z nią po ID.
+        _pd_osoba = None
+        if klient.strip() and _pd_dostepny:
+            _pd_znalezieni = pipedrive_szukaj_osoby(_pd_token, klient.strip())
+            if _pd_znalezieni:
+                _pd_osoba = _pd_znalezieni[0]
+                _szczegoly = " · ".join(x for x in [_pd_osoba.get("email"),
+                                                    _pd_osoba.get("telefon"),
+                                                    _pd_osoba.get("organizacja")] if x)
+                st.success(
+                    f"🟢 Pipedrive: znaleziono osobę **{_pd_osoba['name']}**"
+                    + (f" ({_szczegoly})" if _szczegoly else "")
+                    + " - szansa sprzedaży zostanie powiązana z nią, bez tworzenia duplikatu."
+                    + (f" Podobnych osób: {len(_pd_znalezieni)}." if len(_pd_znalezieni) > 1 else "")
+                )
+            else:
+                st.caption("⚪ Pipedrive: brak takiej osoby - zostanie utworzona przy dodawaniu szansy sprzedaży.")
+
         nr_o = st.text_input("Numer oferty",
                              value=ED.get('nr_o', f"IW/{datetime.now().strftime('%Y/%m/%d')}/01"))
         
@@ -2133,11 +2212,6 @@ with tab_kreator:
         cena_koncowa = cena_manual - rabat
         
         st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
-
-        # (v2.3) Pipedrive przeniesiony POD wygenerowaną ofertę - z wyborem
-        # lejka i etapu oraz osobnym przyciskiem "Dodaj" (koniec z automatem).
-        _pd_token = dane_handlowca_biezacego.get("pipedrive_token", "")
-        _pd_dostepny = bool(_pd_token)
 
     with col2:
         if 'ai_img' in st.session_state:
@@ -2407,6 +2481,11 @@ with tab_kreator:
                     # (v2.4) Do odtworzenia przy edycji bez ponownej generacji:
                     "wstep": wygenerowany_wstep,
                     "wizualizacja_id": wiz_id,
+                    # (v2.6) Dane klienta z Pipedrive (jeśli osoba istniała):
+                    "pd_person_id": (_pd_osoba or {}).get("id", ""),
+                    "klient_email": (_pd_osoba or {}).get("email", ""),
+                    "klient_telefon": (_pd_osoba or {}).get("telefon", ""),
+                    "klient_firma": (_pd_osoba or {}).get("organizacja", ""),
                 }, ensure_ascii=False)
 
                 if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu, dane_oferty_json):
@@ -2424,6 +2503,7 @@ with tab_kreator:
                     "pakiet": pakiet,
                     "cena": cena_koncowa,
                     "pipedrive_deal": None,
+                    "pd_person_id": (_pd_osoba or {}).get("id", ""),
                 }
                 st.balloons()
 
@@ -2474,9 +2554,14 @@ with tab_kreator:
                     _klik_pd = st.button("📤 DODAJ", key="pd_dodaj")
                 if _klik_pd:
                     with st.spinner("Dodaję szansę sprzedaży w Pipedrive..."):
-                        _person_id, _osoba_istniala = (None, False)
-                        if _oo['klient'].strip():
+                        # (v2.6) Jeśli osoba została znaleziona już przy wpisywaniu
+                        # klienta - wiążemy szansę po jej ID (zero ryzyka duplikatu).
+                        if _oo.get('pd_person_id'):
+                            _person_id, _osoba_istniala = _oo['pd_person_id'], True
+                        elif _oo['klient'].strip():
                             _person_id, _osoba_istniala = pipedrive_znajdz_lub_utworz_osobe(_pd_token, _oo['klient'].strip())
+                        else:
+                            _person_id, _osoba_istniala = (None, False)
                         _deal_id = pipedrive_utworz_szanse(
                             _pd_token,
                             f"{_oo['nr_o']} | {_oo['auto']} | {_oo['pakiet']}",
