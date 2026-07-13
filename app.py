@@ -372,6 +372,11 @@ KATEGORIE_DLA_PRODUCENTA = {
     "Inne (wpisz ręcznie)": None,  # None = brak filtra, wszystkie kategorie dostępne
 }
 
+# (v2.2) Migawki domyślnych baz z kodu - fallback dla pobierz_folie(),
+# gdy zakładka 'Folie' w arkuszu nie istnieje lub jest pusta.
+_FOIL_GROUPS_DOMYSLNE = FOIL_GROUPS
+_KATEGORIE_DLA_PRODUCENTA_DOMYSLNE = KATEGORIE_DLA_PRODUCENTA
+
 # ==========================================================================
 # OPIS SCENY - CIEMNY GARAŻ Z OŚWIETLENIEM LED
 # ==========================================================================
@@ -1114,12 +1119,14 @@ def pipedrive_znajdz_lub_utworz_osobe(token, nazwa):
     return None, False
 
 
-def pipedrive_utworz_szanse(token, tytul, person_id, wartosc):
+def pipedrive_utworz_szanse(token, tytul, person_id, wartosc, stage_id=None):
     """Tworzy szansę sprzedaży (deal). Zwraca deal_id lub None."""
     try:
         payload = {"title": tytul, "value": round(float(wartosc), 2), "currency": "PLN"}
         if person_id:
             payload["person_id"] = person_id
+        if stage_id:
+            payload["stage_id"] = stage_id
         r = requests.post(f"{PIPEDRIVE_API}/deals",
                           params={"api_token": token}, json=payload, timeout=30)
         if r.ok and r.json().get("success"):
@@ -1128,6 +1135,32 @@ def pipedrive_utworz_szanse(token, tytul, person_id, wartosc):
     except Exception as e:
         st.warning(f"Pipedrive (szansa): {e}")
     return None
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pipedrive_pobierz_lejki(token):
+    """(v2.3) Lista lejków (pipelines) z konta handlowca: [(id, nazwa), ...]"""
+    try:
+        r = requests.get(f"{PIPEDRIVE_API}/pipelines",
+                         params={"api_token": token}, timeout=30)
+        if r.ok and r.json().get("success"):
+            return [(p["id"], p["name"]) for p in (r.json().get("data") or [])]
+    except Exception:
+        pass
+    return []
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pipedrive_pobierz_etapy(token, pipeline_id):
+    """(v2.3) Lista etapów danego lejka: [(id, nazwa), ...] w kolejności lejka."""
+    try:
+        r = requests.get(f"{PIPEDRIVE_API}/stages",
+                         params={"api_token": token, "pipeline_id": pipeline_id}, timeout=30)
+        if r.ok and r.json().get("success"):
+            return [(s["id"], s["name"]) for s in (r.json().get("data") or [])]
+    except Exception:
+        pass
+    return []
 
 
 def pipedrive_zalacz_pdf(token, deal_id, file_bytes, file_name):
@@ -1260,11 +1293,138 @@ def pobierz_handlowcow():
         return HANDLOWCY_FALLBACK, False
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_folie():
+    """
+    (v2.2) Baza folii z zakładki 'Folie' w arkuszu Google.
+    Kolumny (1. wiersz): Producent | Wykończenie | Kolor | Kategorie
+    - Producent:   np. "3M 2080 Series"
+    - Wykończenie: np. "Połysk (Gloss)"
+    - Kolor:       np. "Zielony Jasny Połysk (G16) - Gloss Light Green"
+    - Kategorie:   (opcjonalna, wystarczy w pierwszym wierszu producenta)
+                   kategorie cennika oddzielone przecinkiem, np. "Zmiana koloru"
+                   albo "Zmiana koloru, PPF". Puste = wszystkie kategorie.
+    Dodanie nowego koloru = dopisanie wiersza + przycisk 'Odśwież dane z arkusza'.
+    Gdy zakładki nie ma - fallback do listy wbudowanej w kod.
+    Zwraca: (foil_groups, kategorie_map, czy_z_arkusza)
+    """
+    _, gs_client = get_google_clients()
+    try:
+        sheet = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Folie")
+        wiersze = sheet.get_all_values()
+        if len(wiersze) < 2:
+            return _FOIL_GROUPS_DOMYSLNE, _KATEGORIE_DLA_PRODUCENTA_DOMYSLNE, False
+        grupy = {}
+        kategorie_map = {}
+        for w in wiersze[1:]:
+            w = list(w) + [""] * (4 - len(w))
+            producent = str(w[0]).strip()
+            wykonczenie = str(w[1]).strip()
+            kolor = str(w[2]).strip()
+            kategorie_raw = str(w[3]).strip()
+            if not producent or not wykonczenie or not kolor:
+                continue
+            grupy.setdefault(producent, {}).setdefault(wykonczenie, [])
+            if kolor not in grupy[producent][wykonczenie]:
+                grupy[producent][wykonczenie].append(kolor)
+            if kategorie_raw and producent not in kategorie_map:
+                kategorie_map[producent] = [k.strip() for k in kategorie_raw.split(",") if k.strip()]
+        if not grupy:
+            return _FOIL_GROUPS_DOMYSLNE, _KATEGORIE_DLA_PRODUCENTA_DOMYSLNE, False
+        # Producenci bez wpisanych kategorii -> brak filtra (wszystkie kategorie)
+        for producent in grupy:
+            kategorie_map.setdefault(producent, None)
+        # Tryb ręczny musi istnieć zawsze - dopisujemy, jeśli nie ma go w arkuszu
+        if "Inne (wpisz ręcznie)" not in grupy:
+            grupy["Inne (wpisz ręcznie)"] = {"Wpisz nazwę folii ręcznie": ["___CUSTOM___"]}
+        kategorie_map["Inne (wpisz ręcznie)"] = None
+        return grupy, kategorie_map, True
+    except Exception:
+        return _FOIL_GROUPS_DOMYSLNE, _KATEGORIE_DLA_PRODUCENTA_DOMYSLNE, False
+
+
 def odswiez_wszystkie_dane():
     pobierz_pliki_szablonow.clear()
     pobierz_cennik.clear()
     pobierz_rejestr.clear()
     pobierz_handlowcow.clear()
+    pobierz_folie.clear()
+
+
+# ==========================================================================
+# (v2.3) ZAPIS KONFIGURACJI Z POZIOMU APLIKACJI
+# Handlowcy nie mają dostępu do arkusza - wszystkie zmiany (nowe kolory folii,
+# dane handlowców) robi się w zakładce "Ustawienia" w aplikacji, a aplikacja
+# sama zapisuje je do arkusza kontem technicznym.
+# ==========================================================================
+_NAGLOWKI_FOLIE = ["Producent", "Wykończenie", "Kolor", "Kategorie"]
+_NAGLOWKI_HANDLOWCY = ["Handlowiec", "Stanowisko", "Telefon", "Email", "PIN", "PipedriveToken", "Rola"]
+
+
+def _pobierz_lub_utworz_zakladke(nazwa, naglowki, rows=500, cols=10):
+    _, gs_client = get_google_clients()
+    ss = gs_client.open_by_url(LINK_DO_ARKUSZA)
+    try:
+        return ss.worksheet(nazwa), False
+    except Exception:
+        ws = ss.add_worksheet(title=nazwa, rows=rows, cols=cols)
+        ws.update(values=[naglowki], range_name="A1")
+        return ws, True
+
+
+def utworz_zakladke_folie_i_importuj():
+    """Tworzy zakładkę 'Folie' i wgrywa do niej CAŁĄ wbudowaną bazę kolorów."""
+    ws, _ = _pobierz_lub_utworz_zakladke("Folie", _NAGLOWKI_FOLIE, rows=400, cols=6)
+    wiersze = [_NAGLOWKI_FOLIE]
+    for prod, cats in _FOIL_GROUPS_DOMYSLNE.items():
+        if prod == "Inne (wpisz ręcznie)":
+            continue
+        kat = _KATEGORIE_DLA_PRODUCENTA_DOMYSLNE.get(prod)
+        kat_str = ", ".join(kat) if kat else ""
+        pierwszy = True
+        for wyk, kolory in cats.items():
+            for kolor in kolory:
+                wiersze.append([prod, wyk, kolor, kat_str if pierwszy else ""])
+                pierwszy = False
+    ws.update(values=wiersze, range_name="A1")
+    pobierz_folie.clear()
+
+
+def dodaj_kolor_folii(producent, wykonczenie, kolor, kategorie_str=""):
+    """Dopisuje nowy kolor do zakładki 'Folie' (tworzy ją, jeśli nie istnieje)."""
+    ws, nowa = _pobierz_lub_utworz_zakladke("Folie", _NAGLOWKI_FOLIE, rows=400, cols=6)
+    ws.append_row([producent.strip(), wykonczenie.strip(), kolor.strip(), kategorie_str.strip()])
+    pobierz_folie.clear()
+    return True
+
+
+def utworz_zakladke_handlowcy_i_importuj(handlowcy_dict):
+    """Tworzy zakładkę 'Handlowcy' i wgrywa aktualną listę handlowców."""
+    ws, _ = _pobierz_lub_utworz_zakladke("Handlowcy", _NAGLOWKI_HANDLOWCY, rows=100, cols=10)
+    wiersze = [_NAGLOWKI_HANDLOWCY]
+    for nazwa, d in handlowcy_dict.items():
+        wiersze.append([
+            nazwa, d.get("stanowisko", ""), d.get("telefon", ""), d.get("email", ""),
+            d.get("pin", ""), d.get("pipedrive_token", ""), d.get("rola", "handlowiec"),
+        ])
+    ws.update(values=wiersze, range_name="A1")
+    pobierz_handlowcow.clear()
+
+
+def zapisz_handlowca(nazwa, stanowisko, telefon, email, pin, token, rola):
+    """Aktualizuje istniejącego handlowca (po nazwie) lub dodaje nowego."""
+    ws, _ = _pobierz_lub_utworz_zakladke("Handlowcy", _NAGLOWKI_HANDLOWCY, rows=100, cols=10)
+    wiersz_danych = [nazwa.strip(), stanowisko.strip(), telefon.strip(), email.strip(),
+                     str(pin).strip(), token.strip(), (rola or "handlowiec").strip().lower()]
+    wartosci = ws.get_all_values()
+    for i, w in enumerate(wartosci[1:], start=2):  # start=2: numeracja wierszy arkusza
+        if len(w) > 0 and str(w[0]).strip() == nazwa.strip():
+            ws.update(values=[wiersz_danych], range_name=f"A{i}:G{i}")
+            pobierz_handlowcow.clear()
+            return "zaktualizowano"
+    ws.append_row(wiersz_danych)
+    pobierz_handlowcow.clear()
+    return "dodano"
 
 
 # --- APLIKACJA ---
@@ -1618,6 +1778,10 @@ service, client = get_google_clients()
 pliki_na_dysku = pobierz_pliki_szablonow()
 HANDLOWCY, HANDLOWCY_Z_ARKUSZA = pobierz_handlowcow()
 
+# (v2.2) Jeśli w arkuszu istnieje zakładka 'Folie', baza kolorów i mapowanie
+# kategorii cennika pochodzą z niej. Nowy kolor dodajesz wierszem w arkuszu.
+FOIL_GROUPS, KATEGORIE_DLA_PRODUCENTA, FOLIE_Z_ARKUSZA = pobierz_folie()
+
 try:
     df_cennik = pobierz_cennik()
 except Exception as e:
@@ -1829,7 +1993,7 @@ with st.sidebar:
 
 
 # ZAKŁADKI W GŁÓWNYM PANELU
-tab_kreator, tab_rejestr = st.tabs(["⚙️ Kreator Ofert", "📋 Ewidencja (Rejestr)"])
+tab_kreator, tab_rejestr, tab_ustawienia = st.tabs(["⚙️ Kreator Ofert", "📋 Ewidencja (Rejestr)", "🛠 Ustawienia"])
 
 with tab_kreator:
     st.markdown("""
@@ -1929,21 +2093,10 @@ with tab_kreator:
         
         st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
 
-        # (v2) PIPEDRIVE - opcja dodania szansy sprzedaży
+        # (v2.3) Pipedrive przeniesiony POD wygenerowaną ofertę - z wyborem
+        # lejka i etapu oraz osobnym przyciskiem "Dodaj" (koniec z automatem).
         _pd_token = dane_handlowca_biezacego.get("pipedrive_token", "")
         _pd_dostepny = bool(_pd_token)
-        dodaj_do_pipedrive = st.checkbox(
-            "📤 Dodaj jako szansę sprzedaży w Pipedrive (z załączonym PDF)",
-            value=_pd_dostepny,
-            disabled=not _pd_dostepny,
-            help="Utworzy osobę (jeśli nie istnieje), szansę sprzedaży przypisaną do Ciebie i załączy PDF oferty."
-        )
-        if not _pd_dostepny:
-            st.caption(
-                f"ℹ️ Pipedrive nieaktywny dla: {wybrany_handlowiec}. "
-                f"Uzupełnij kolumnę **PipedriveToken** w zakładce 'Handlowcy' arkusza Google "
-                f"(token znajdziesz w Pipedrive: Ustawienia → Personal preferences → API)."
-            )
 
     with col2:
         if 'ai_img' in st.session_state:
@@ -2195,31 +2348,90 @@ with tab_kreator:
                 if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu, dane_oferty_json):
                     st.success(f"✅ Oferta zapisana w systemie CRM! Plik został zachowany w folderze 'Oferty'.")
 
-                # (v2) PIPEDRIVE - osoba -> szansa -> załączony PDF
-                if dodaj_do_pipedrive and _pd_dostepny:
+                # (v2.3) Zapamiętujemy wygenerowaną ofertę w sesji - dzięki temu
+                # przycisk pobierania i sekcja Pipedrive nie znikają po
+                # przeładowaniu widoku (Streamlit wykonuje rerun po każdym kliknięciu).
+                st.session_state['ostatnia_oferta'] = {
+                    "pdf_bytes": pdf_bytes,
+                    "nazwa_pliku": nazwa_pliku_wyjsciowego,
+                    "nr_o": nr_o,
+                    "klient": klient,
+                    "auto": f"{final_brand} {final_model}",
+                    "pakiet": pakiet,
+                    "cena": cena_koncowa,
+                    "pipedrive_deal": None,
+                }
+                st.balloons()
+
+    # ==========================================================
+    # (v2.3) SEKCJA PO WYGENEROWANIU OFERTY
+    # Pobieranie PDF + dodawanie do Pipedrive NA ŻYCZENIE,
+    # z wyborem lejka (pipeline) i etapu (stage).
+    # ==========================================================
+    _oo = st.session_state.get('ostatnia_oferta')
+    if _oo:
+        st.markdown("---")
+        st.markdown(f"#### 📄 Wygenerowana oferta: {_oo['nr_o']} · {_oo['auto']}"
+                    + (f" · {_oo['klient']}" if _oo['klient'].strip() else ""))
+        st.download_button("📥 POBIERZ OFERTĘ PDF LOKALNIE",
+                           data=_oo['pdf_bytes'],
+                           file_name=_oo['nazwa_pliku'],
+                           key="dl_ostatnia_oferta")
+
+        st.markdown("##### 📤 Pipedrive - szansa sprzedaży")
+        if _oo.get('pipedrive_deal'):
+            st.success(f"✅ Ta oferta jest już w Pipedrive - szansa #{_oo['pipedrive_deal']} z załączonym PDF.")
+        elif not _pd_dostepny:
+            st.caption(
+                f"ℹ️ Pipedrive nieaktywny dla: **{wybrany_handlowiec}** - brak tokenu API. "
+                f"Token można uzupełnić w zakładce **🛠 Ustawienia** "
+                f"(w Pipedrive znajdziesz go w: Ustawienia → Personal preferences → API)."
+            )
+        else:
+            _lejki = pipedrive_pobierz_lejki(_pd_token)
+            if not _lejki:
+                st.warning("Nie udało się pobrać lejków z Pipedrive - sprawdź, czy token API jest poprawny.")
+            else:
+                col_pd1, col_pd2, col_pd3 = st.columns([2, 2, 1])
+                with col_pd1:
+                    _lejki_nazwy = [n for _, n in _lejki]
+                    _wybrany_lejek = st.selectbox("Lejek (pipeline)", _lejki_nazwy, key="pd_lejek")
+                    _lejek_id = next(i for i, n in _lejki if n == _wybrany_lejek)
+                with col_pd2:
+                    _etapy = pipedrive_pobierz_etapy(_pd_token, _lejek_id)
+                    _stage_id = None
+                    if _etapy:
+                        _etapy_nazwy = [n for _, n in _etapy]
+                        _wybrany_etap = st.selectbox("Etap", _etapy_nazwy, index=0, key=f"pd_etap_{_lejek_id}")
+                        _stage_id = next(i for i, n in _etapy if n == _wybrany_etap)
+                with col_pd3:
+                    st.write("")
+                    st.write("")
+                    _klik_pd = st.button("📤 DODAJ", key="pd_dodaj")
+                if _klik_pd:
                     with st.spinner("Dodaję szansę sprzedaży w Pipedrive..."):
-                        person_id, osoba_istniala = (None, False)
-                        if klient.strip():
-                            person_id, osoba_istniala = pipedrive_znajdz_lub_utworz_osobe(_pd_token, klient.strip())
-                        deal_id = pipedrive_utworz_szanse(
+                        _person_id, _osoba_istniala = (None, False)
+                        if _oo['klient'].strip():
+                            _person_id, _osoba_istniala = pipedrive_znajdz_lub_utworz_osobe(_pd_token, _oo['klient'].strip())
+                        _deal_id = pipedrive_utworz_szanse(
                             _pd_token,
-                            f"{nr_o} | {final_brand} {final_model} | {pakiet}",
-                            person_id,
-                            cena_koncowa
+                            f"{_oo['nr_o']} | {_oo['auto']} | {_oo['pakiet']}",
+                            _person_id,
+                            _oo['cena'],
+                            stage_id=_stage_id
                         )
-                        if deal_id:
-                            if pipedrive_zalacz_pdf(_pd_token, deal_id, pdf_bytes, nazwa_pliku_wyjsciowego):
+                        if _deal_id:
+                            if pipedrive_zalacz_pdf(_pd_token, _deal_id, _oo['pdf_bytes'], _oo['nazwa_pliku']):
+                                _oo['pipedrive_deal'] = _deal_id
+                                st.session_state['ostatnia_oferta'] = _oo
                                 st.success(
-                                    f"📤 Pipedrive: szansa #{deal_id} utworzona "
-                                    f"({'istniejąca osoba' if osoba_istniala else 'nowa osoba'}), PDF załączony."
+                                    f"📤 Szansa #{_deal_id} utworzona w lejku '{_wybrany_lejek}' "
+                                    f"({'istniejąca osoba' if _osoba_istniala else 'nowa osoba'}), PDF załączony."
                                 )
                             else:
-                                st.warning(f"Pipedrive: szansa #{deal_id} utworzona, ale załączenie PDF nie powiodło się.")
+                                st.warning(f"Szansa #{_deal_id} utworzona, ale załączenie PDF nie powiodło się.")
                         else:
-                            st.warning("Pipedrive: nie udało się utworzyć szansy sprzedaży - sprawdź token API.")
-                    
-                st.balloons()
-                st.download_button("📥 POBIERZ OFERTĘ PDF LOKALNIE", data=pdf_bytes, file_name=nazwa_pliku_wyjsciowego)
+                            st.warning("Nie udało się utworzyć szansy sprzedaży - sprawdź token API.")
 
 with tab_rejestr:
     st.markdown("""
@@ -2307,27 +2519,163 @@ with tab_rejestr:
     except Exception as e:
         st.warning(f"Brak możliwości wczytania rejestru. Pamiętaj, by w nagłówkach bazy (Arkusz 'Rejestr', 1 wiersz) dodać kolumnę na link do PDF. Błąd: {e}")
 
-    # (v2) Panel admina - podgląd handlowców z arkusza
-    if jest_adminem:
-        with st.expander("👑 Panel admina - handlowcy, PIN-y i tokeny Pipedrive"):
-            st.write(
-                "Dane pochodzą z zakładki **Handlowcy** w arkuszu Google (kolumny: "
-                "`Handlowiec | Stanowisko | Telefon | Email | PIN | PipedriveToken | Rola`). "
-                "Edytujesz bezpośrednio w arkuszu, potem klikasz **Odśwież dane z arkusza** w panelu bocznym."
+with tab_ustawienia:
+    st.markdown("""
+    <div class="iw-main-header">
+        <div class="iw-main-header-text">
+            <div class="iw-main-header-title">Ustawienia</div>
+            <div class="iw-main-header-subtitle">Folie · Handlowcy · Konfiguracja</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ==========================================================
+    # (v2.3) FOLIE - dodawanie kolorów z poziomu aplikacji
+    # ==========================================================
+    st.markdown("### 🎨 Baza folii")
+
+    if not FOLIE_Z_ARKUSZA:
+        st.info(
+            "Baza kolorów działa obecnie na liście wbudowanej w kod. Kliknij poniżej, aby "
+            "przenieść ją do arkusza Google - od tego momentu nowe kolory dodaje się "
+            "formularzem poniżej, bez dotykania kodu i bez wchodzenia do arkusza."
+        )
+        if st.button("📥 UTWÓRZ BAZĘ FOLII I ZAIMPORTUJ OBECNE KOLORY", disabled=not zalogowany):
+            with st.spinner("Tworzę zakładkę 'Folie' i importuję bazę kolorów..."):
+                try:
+                    utworz_zakladke_folie_i_importuj()
+                    st.success("✅ Baza folii przeniesiona do arkusza. Odświeżam...")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Nie udało się utworzyć bazy: {e}")
+    else:
+        st.caption(f"✅ Baza kolorów działa z arkusza. Producentów: "
+                   f"{len([p for p in FOIL_GROUPS if p != 'Inne (wpisz ręcznie)'])}, "
+                   f"kolorów: {sum(len(k) for p, c in FOIL_GROUPS.items() if p != 'Inne (wpisz ręcznie)' for k in c.values())}.")
+
+        st.markdown("#### ➕ Dodaj nowy kolor")
+        _prod_opcje = [p for p in FOIL_GROUPS.keys() if p != "Inne (wpisz ręcznie)"] + ["➕ Nowy producent..."]
+        _sel_prod = st.selectbox("Producent", _prod_opcje, key="ust_prod")
+
+        _kategorie_nowego = ""
+        if _sel_prod == "➕ Nowy producent...":
+            _nowy_prod = st.text_input("Nazwa nowego producenta", key="ust_nowy_prod",
+                                       placeholder="np. Hexis Skintac")
+            _kat_wybor = st.multiselect(
+                "Kategorie cennika dla tego producenta (puste = wszystkie)",
+                ["PPF", "Zmiana koloru"], key="ust_kat_nowego")
+            _kategorie_nowego = ", ".join(_kat_wybor)
+            _final_prod = _nowy_prod.strip()
+            _wyk_opcje = ["➕ Nowe wykończenie..."]
+        else:
+            _final_prod = _sel_prod
+            _wyk_opcje = list(FOIL_GROUPS[_sel_prod].keys()) + ["➕ Nowe wykończenie..."]
+
+        _sel_wyk = st.selectbox("Wykończenie", _wyk_opcje, key="ust_wyk")
+        if _sel_wyk == "➕ Nowe wykończenie...":
+            _final_wyk = st.text_input("Nazwa nowego wykończenia", key="ust_nowe_wyk",
+                                       placeholder="np. Połysk (Gloss)").strip()
+        else:
+            _final_wyk = _sel_wyk
+
+        _nowy_kolor = st.text_input(
+            "Nazwa koloru",
+            key="ust_kolor",
+            placeholder="np. Zielony Jasny Połysk (G16) - Gloss Light Green",
+            help="Zalecany format: Nazwa Polska (Kod) - Nazwa Angielska. "
+                 "Nazwa angielska jest używana w promptach do AI."
+        )
+
+        if st.button("💾 DODAJ KOLOR DO BAZY", disabled=not zalogowany, key="ust_dodaj_kolor"):
+            if not _final_prod or not _final_wyk or not _nowy_kolor.strip():
+                st.error("Uzupełnij producenta, wykończenie i nazwę koloru.")
+            else:
+                _duplikat = _nowy_kolor.strip() in FOIL_GROUPS.get(_final_prod, {}).get(_final_wyk, [])
+                if _duplikat:
+                    st.warning("Ten kolor już istnieje w bazie dla tego producenta i wykończenia.")
+                else:
+                    try:
+                        dodaj_kolor_folii(_final_prod, _final_wyk, _nowy_kolor, _kategorie_nowego)
+                        st.success(f"✅ Dodano: {_final_prod} → {_final_wyk} → {_nowy_kolor.strip()}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Nie udało się dodać koloru: {e}")
+
+    st.markdown("---")
+
+    # ==========================================================
+    # (v2.3) HANDLOWCY - zarządzanie z poziomu aplikacji (admin)
+    # ==========================================================
+    st.markdown("### 👥 Handlowcy")
+    if not jest_adminem:
+        st.caption("Zarządzanie handlowcami jest dostępne tylko dla administratora.")
+    else:
+        if not HANDLOWCY_Z_ARKUSZA:
+            st.info(
+                "Lista handlowców działa obecnie na danych wbudowanych w kod - bez PIN-ów, "
+                "tokenów Pipedrive i ról. Kliknij poniżej, aby przenieść ją do arkusza - od tego "
+                "momentu wszystko (PIN-y, tokeny, role, nowi handlowcy) ustawiasz formularzem poniżej."
             )
-            df_handlowcy = pd.DataFrame([
+            if st.button("📥 UTWÓRZ BAZĘ HANDLOWCÓW I ZAIMPORTUJ OBECNĄ LISTĘ", disabled=not zalogowany):
+                with st.spinner("Tworzę zakładkę 'Handlowcy' i importuję listę..."):
+                    try:
+                        utworz_zakladke_handlowcy_i_importuj(HANDLOWCY)
+                        st.success("✅ Lista handlowców przeniesiona do arkusza. Odświeżam...")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Nie udało się utworzyć bazy: {e}")
+        else:
+            _df_h = pd.DataFrame([
                 {
                     "Handlowiec": nazwa,
                     "Stanowisko": d.get("stanowisko", ""),
                     "Telefon": d.get("telefon", ""),
                     "Email": d.get("email", ""),
-                    "PIN": "•••" if d.get("pin") else "(brak - bez logowania)",
-                    "Pipedrive": "✅ aktywny" if d.get("pipedrive_token") else "❌ brak tokenu",
+                    "PIN": "•••" if d.get("pin") else "(brak)",
+                    "Pipedrive": "✅" if d.get("pipedrive_token") else "❌",
                     "Rola": d.get("rola", "handlowiec"),
                 }
                 for nazwa, d in HANDLOWCY.items()
             ])
-            st.dataframe(df_handlowcy, hide_index=True, use_container_width=True)
+            st.dataframe(_df_h, hide_index=True, use_container_width=True)
+
+            st.markdown("#### ✏️ Dodaj lub edytuj handlowca")
+            _h_opcje = list(HANDLOWCY.keys()) + ["➕ Nowy handlowiec..."]
+            _sel_h = st.selectbox("Handlowiec", _h_opcje, key="ust_h_sel")
+
+            if _sel_h == "➕ Nowy handlowiec...":
+                _h_dane = {"stanowisko": "", "telefon": "", "email": "",
+                           "pin": "", "pipedrive_token": "", "rola": "handlowiec"}
+                _h_nazwa = st.text_input("Imię i nazwisko", key="ust_h_nazwa")
+            else:
+                _h_dane = HANDLOWCY[_sel_h]
+                _h_nazwa = _sel_h
+
+            col_h1, col_h2 = st.columns(2)
+            with col_h1:
+                _h_stanowisko = st.text_input("Stanowisko", value=_h_dane.get("stanowisko", ""), key=f"ust_h_stan_{_sel_h}")
+                _h_telefon = st.text_input("Telefon", value=_h_dane.get("telefon", ""), key=f"ust_h_tel_{_sel_h}")
+                _h_email = st.text_input("Email", value=_h_dane.get("email", ""), key=f"ust_h_mail_{_sel_h}")
+            with col_h2:
+                _h_pin = st.text_input("PIN (puste = bez logowania)", value=_h_dane.get("pin", ""), key=f"ust_h_pin_{_sel_h}")
+                _h_token = st.text_input("Token API Pipedrive", value=_h_dane.get("pipedrive_token", ""),
+                                         type="password", key=f"ust_h_tok_{_sel_h}",
+                                         help="Pipedrive: Ustawienia → Personal preferences → API")
+                _h_rola = st.selectbox("Rola", ["handlowiec", "admin"],
+                                       index=(1 if _h_dane.get("rola") == "admin" else 0),
+                                       key=f"ust_h_rola_{_sel_h}")
+
+            if st.button("💾 ZAPISZ HANDLOWCA", key="ust_h_zapisz"):
+                if not _h_nazwa.strip():
+                    st.error("Podaj imię i nazwisko handlowca.")
+                else:
+                    try:
+                        _wynik = zapisz_handlowca(_h_nazwa, _h_stanowisko, _h_telefon,
+                                                  _h_email, _h_pin, _h_token, _h_rola)
+                        st.success(f"✅ {'Zaktualizowano dane' if _wynik == 'zaktualizowano' else 'Dodano handlowca'}: {_h_nazwa.strip()}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Nie udało się zapisać: {e}")
 
 st.markdown("""
 <div class="iw-footer">
