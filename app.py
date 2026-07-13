@@ -1802,6 +1802,27 @@ def _eidx(options, val, default=0):
         return default if 0 <= default < len(options) else 0
 
 
+def _pole(rekord, *nazwy):
+    """(v2.4) Odporne pobieranie pola z wiersza rejestru - ignoruje wielkość
+    liter, spacje i znaki specjalne w nazwach nagłówków ('Nr oferty' == 'nroferty')."""
+    znorm = {re.sub(r'\W', '', str(k)).lower(): v for k, v in rekord.items()}
+    for n in nazwy:
+        v = znorm.get(re.sub(r'\W', '', n).lower())
+        if v not in (None, ""):
+            return v
+    return ""
+
+
+def _wyciagnij_dane_oferty(rekord):
+    """(v2.4) Znajduje JSON z parametrami oferty w dowolnej kolumnie wiersza -
+    niezależnie od tego, jak nazwano nagłówek (DaneOferty / Dane Oferty / itd.)."""
+    for v in rekord.values():
+        s = str(v).strip()
+        if s.startswith('{') and '"nr_o"' in s:
+            return s
+    return ""
+
+
 # --- PANEL BOCZNY ---
 with st.sidebar:
     if LOGO_B64:
@@ -2014,6 +2035,8 @@ with tab_kreator:
         with col_ed2:
             if st.button("❌ Zakończ edycję"):
                 st.session_state.pop('edycja', None)
+                st.session_state.pop('ai_img', None)
+                st.session_state['wstep_editor'] = ''
                 st.rerun()
 
     col1, col2 = st.columns(2)
@@ -2114,6 +2137,11 @@ with tab_kreator:
     # ==========================================================
     st.markdown("---")
     st.markdown("### ✍️ Tekst wstępu (strona 2 oferty)")
+    # (v2.4) Wczytanie wstępu z edytowanej oferty - flaga ustawiana przy kliknięciu
+    # "Edytuj" w Ewidencji, konsumowana tutaj PRZED utworzeniem pola tekstowego
+    # (Streamlit nie pozwala zmieniać stanu widgetu po jego utworzeniu w tym samym przebiegu).
+    if 'zaladuj_wstep' in st.session_state:
+        st.session_state['wstep_editor'] = st.session_state.pop('zaladuj_wstep')
     st.session_state.setdefault('wstep_editor', '')
 
     col_w1, col_w2 = st.columns([1, 3])
@@ -2313,9 +2341,24 @@ with tab_kreator:
                 nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
                 
                 oauth_drive = get_oauth_drive_service()
+                wiz_id = ""
                 if oauth_drive:
                     folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
                     utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, pdf_bytes)
+                    # (v2.4) Zapisujemy też PNG wizualizacji - dzięki temu przy
+                    # późniejszej edycji oferty NIE trzeba generować obrazu od nowa.
+                    try:
+                        _wiz_meta = {
+                            'name': f"Wizualizacja_{nr_o.replace('/', '_')}_{datetime.now().strftime('%H%M%S')}.png",
+                            'parents': [folder_oferty_id]
+                        }
+                        _wiz_media = MediaIoBaseUpload(io.BytesIO(st.session_state['ai_img']),
+                                                       mimetype='image/png', resumable=True)
+                        wiz_id = oauth_drive.files().create(
+                            body=_wiz_meta, media_body=_wiz_media, fields='id'
+                        ).execute().get('id', "")
+                    except Exception:
+                        wiz_id = ""
                 else:
                     utworzony_link = None
                     st.warning("OAuth Drive niedostępny - PDF nie został zapisany w chmurze. Pobierz plik lokalnie poniżej.")
@@ -2343,6 +2386,9 @@ with tab_kreator:
                     "cena_manual": cena_manual,
                     "rabat": rabat,
                     "dodatki": [d['name'] for d in wybrane_dodatki],
+                    # (v2.4) Do odtworzenia przy edycji bez ponownej generacji:
+                    "wstep": wygenerowany_wstep,
+                    "wizualizacja_id": wiz_id,
                 }, ensure_ascii=False)
 
                 if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu, dane_oferty_json):
@@ -2444,80 +2490,98 @@ with tab_rejestr:
     """, unsafe_allow_html=True)
     try:
         dane_rejestru = pobierz_rejestr()
-        if dane_rejestru:
-            df_rejestr = pd.DataFrame(dane_rejestru)
-
-            # (v2) Handlowiec widzi tylko swoje oferty; admin widzi wszystkie.
-            # Działa dopiero gdy zakładka 'Handlowcy' istnieje i ma role -
-            # bez niej wszyscy z fallbacku mają wgląd zgodny ze swoją rolą.
-            if not jest_adminem and 'Handlowiec' in df_rejestr.columns:
-                df_rejestr_widok = df_rejestr[df_rejestr['Handlowiec'] == wybrany_handlowiec].copy()
-            else:
-                df_rejestr_widok = df_rejestr.copy()
-
-            # (v2) Kolumny DaneOferty nie pokazujemy w tabeli (to techniczny JSON)
-            df_widok = df_rejestr_widok.drop(columns=['DaneOferty'], errors='ignore')
-
-            if not df_widok.empty:
-                nazwa_kolumny_link = df_widok.columns[-1]
-
-                st.data_editor(
-                    df_widok,
-                    column_config={
-                        nazwa_kolumny_link: st.column_config.LinkColumn(
-                            "Plik PDF", help="Kliknij aby pobrać dokument ofertowy z dysku", display_text="Otwórz dokument"
-                        )
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-                
-                csv = df_widok.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="⬇️ Pobierz ewidencję jako CSV",
-                    data=csv,
-                    file_name=f"Rejestr_Ofert_ITSWRAP_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime='text/csv',
-                )
-
-                # ==========================================================
-                # (v2) EDYCJA ZAPISANEJ OFERTY
-                # Wybierasz ofertę z listy -> "Wczytaj do edycji" -> wszystkie
-                # pola w Kreatorze i panelu bocznym wypełniają się zapisanymi
-                # wartościami. Zmieniasz np. kolor lub cenę i generujesz nowy PDF.
-                # ==========================================================
-                st.markdown("---")
-                st.markdown("### ✏️ Edytuj zapisaną ofertę")
-                oferty_edytowalne = [
-                    r for r in dane_rejestru
-                    if str(r.get('DaneOferty', '')).strip().startswith('{')
-                    and (jest_adminem or str(r.get('Handlowiec', '')) == wybrany_handlowiec)
-                ]
-                if oferty_edytowalne:
-                    opcje_edycji = {
-                        f"{r.get('Nr oferty', '?')}  |  {r.get('Klient', '(bez nazwy)')}  |  {r.get('Data', '?')}": r
-                        for r in reversed(oferty_edytowalne)
-                    }
-                    wybor_oferty = st.selectbox("Wybierz ofertę", list(opcje_edycji.keys()))
-                    if st.button("📂 WCZYTAJ DO EDYCJI"):
-                        try:
-                            st.session_state['edycja'] = json.loads(opcje_edycji[wybor_oferty]['DaneOferty'])
-                            # Wizualizację trzeba wygenerować na nowo (nie przechowujemy obrazów w arkuszu)
-                            st.session_state.pop('ai_img', None)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Nie udało się wczytać danych oferty: {e}")
-                else:
-                    st.info(
-                        "Brak ofert możliwych do edycji. Edycja działa dla ofert wygenerowanych "
-                        "w nowej wersji systemu (wymagana kolumna **DaneOferty** w arkuszu 'Rejestr')."
-                    )
-            else:
-                st.info("Brak ofert przypisanych do tego handlowca.")
-        else:
+        if not dane_rejestru:
             st.info("Rejestr jest pusty lub arkusz nie zawiera jeszcze wpisów.")
+        else:
+            # (v2.4) JEDNA lista ofert. Handlowiec widzi swoje, admin wszystkie
+            # (role działają dopiero, gdy istnieje baza handlowców z rolami).
+            if jest_adminem:
+                rekordy = list(dane_rejestru)
+            else:
+                rekordy = [r for r in dane_rejestru
+                           if str(_pole(r, 'Handlowiec')).strip() == wybrany_handlowiec]
+
+            if not rekordy:
+                st.info("Brak ofert przypisanych do tego handlowca.")
+            else:
+                col_f1, col_f2 = st.columns([3, 1])
+                with col_f1:
+                    szukaj = st.text_input("🔎 Szukaj (klient, numer oferty, auto...)", key="rej_szukaj")
+                with col_f2:
+                    st.write("")
+                    # CSV bez technicznej kolumny z JSON-em
+                    _df_csv = pd.DataFrame(rekordy)
+                    _df_csv = _df_csv[[c for c in _df_csv.columns
+                                       if re.sub(r'\W', '', str(c)).lower() != 'daneoferty']]
+                    st.download_button(
+                        label="⬇️ CSV",
+                        data=_df_csv.to_csv(index=False).encode('utf-8'),
+                        file_name=f"Rejestr_Ofert_ITSWRAP_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime='text/csv',
+                        use_container_width=True,
+                    )
+
+                if szukaj.strip():
+                    _s = szukaj.strip().lower()
+                    rekordy = [r for r in rekordy
+                               if _s in ' '.join(str(v) for v in r.values()).lower()]
+
+                LIMIT_LISTY = 50
+                widoczne = list(reversed(rekordy))[:LIMIT_LISTY]
+                st.caption(f"Ofert: {len(rekordy)} · najnowsze u góry"
+                           + (f" · pokazuję {LIMIT_LISTY} - zawęź wyszukiwarką" if len(rekordy) > LIMIT_LISTY else ""))
+
+                for _i, r in enumerate(widoczne):
+                    _json_oferty = _wyciagnij_dane_oferty(r)
+                    _link_pdf = next((str(v).strip() for v in r.values()
+                                      if str(v).strip().startswith('http')), "")
+                    c1, c2, c3, c4 = st.columns([2.4, 3.0, 1.0, 1.0])
+                    with c1:
+                        st.markdown(
+                            f"**{_pole(r, 'Nr oferty', 'Numer oferty', 'Nr') or '(bez numeru)'}**  \n"
+                            f"<span style='color:#4A5568; font-size:0.85rem'>"
+                            f"{_pole(r, 'Data')} · {_pole(r, 'Handlowiec')}</span>",
+                            unsafe_allow_html=True)
+                    with c2:
+                        st.markdown(
+                            f"{_pole(r, 'Klient') or '(klient bez nazwy)'}  \n"
+                            f"<span style='color:#4A5568; font-size:0.85rem'>"
+                            f"{_pole(r, 'Auto', 'Samochód')} · {_pole(r, 'Usługa', 'Usluga')} · "
+                            f"{_pole(r, 'Cena', 'Cena netto', 'Cena końcowa')}</span>",
+                            unsafe_allow_html=True)
+                    with c3:
+                        if _link_pdf:
+                            st.link_button("📥 Pobierz", _link_pdf, use_container_width=True)
+                        else:
+                            st.caption("brak PDF")
+                    with c4:
+                        if _json_oferty:
+                            if st.button("✏️ Edytuj", key=f"rej_edit_{_i}", use_container_width=True):
+                                try:
+                                    _d = json.loads(_json_oferty)
+                                    st.session_state['edycja'] = _d
+                                    # Wstęp: wczyta się do edytora przy następnym przebiegu
+                                    st.session_state['zaladuj_wstep'] = _d.get('wstep', '')
+                                    # Wizualizacja: jeśli była zapisana na Dysku - pobieramy,
+                                    # żeby NIE trzeba było generować jej od nowa.
+                                    st.session_state.pop('ai_img', None)
+                                    _wiz_id = _d.get('wizualizacja_id', '')
+                                    if _wiz_id:
+                                        with st.spinner("Wczytuję zapisaną wizualizację..."):
+                                            try:
+                                                _oauth_tmp = get_oauth_drive_service()
+                                                if _oauth_tmp:
+                                                    st.session_state['ai_img'] = download_file(_oauth_tmp, _wiz_id).getvalue()
+                                            except Exception:
+                                                pass
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Nie udało się wczytać oferty: {e}")
+                        else:
+                            st.caption("✏️ n/d")
+                    st.markdown("<hr style='margin:2px 0 10px 0; opacity:0.2'>", unsafe_allow_html=True)
     except Exception as e:
-        st.warning(f"Brak możliwości wczytania rejestru. Pamiętaj, by w nagłówkach bazy (Arkusz 'Rejestr', 1 wiersz) dodać kolumnę na link do PDF. Błąd: {e}")
+        st.warning(f"Brak możliwości wczytania rejestru. Błąd: {e}")
 
 with tab_ustawienia:
     st.markdown("""
