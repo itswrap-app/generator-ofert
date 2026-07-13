@@ -1823,6 +1823,23 @@ def _wyciagnij_dane_oferty(rekord):
     return ""
 
 
+def _handlowiec_wiersza(rekord):
+    """(v2.5) Ustala handlowca danego wiersza rejestru:
+    1) po typowych nazwach nagłówka kolumny,
+    2) a gdy to zawiedzie - po zawartości: szuka w wierszu wartości,
+       która jest nazwiskiem z aktualnej listy handlowców.
+    Dzięki temu filtr 'moje oferty' działa niezależnie od tego,
+    jak nazwano kolumnę w arkuszu."""
+    v = _pole(rekord, 'Handlowiec', 'Opiekun', 'Opiekun klienta', 'Sprzedawca', 'Doradca')
+    if str(v).strip():
+        return str(v).strip()
+    for val in rekord.values():
+        s = str(val).strip()
+        if s and s in HANDLOWCY:
+            return s
+    return ""
+
+
 # --- PANEL BOCZNY ---
 with st.sidebar:
     if LOGO_B64:
@@ -2049,13 +2066,14 @@ with tab_kreator:
         if klient.strip() and not ED:
             _rej = pobierz_rejestr()
             _trafienia = [r for r in _rej
-                          if str(r.get('Klient', '')).strip().lower() == klient.strip().lower()]
+                          if str(_pole(r, 'Klient')).strip().lower() == klient.strip().lower()]
             if _trafienia:
                 _ost = _trafienia[-1]
                 st.warning(
                     f"⚠️ Klient **{klient}** jest już w rejestrze "
-                    f"(ostatnia oferta: {_ost.get('Nr oferty', '?')} z {_ost.get('Data', '?')}, "
-                    f"handlowiec: {_ost.get('Handlowiec', '?')}). "
+                    f"(ostatnia oferta: {_pole(_ost, 'Nr oferty', 'Numer oferty', 'Nr') or '?'} "
+                    f"z {_pole(_ost, 'Data') or '?'}, "
+                    f"handlowiec: {_handlowiec_wiersza(_ost) or '?'}). "
                     f"Jeśli chcesz kontynuować tamtą ofertę, wczytaj ją w zakładce Ewidencja."
                 )
 
@@ -2499,7 +2517,7 @@ with tab_rejestr:
                 rekordy = list(dane_rejestru)
             else:
                 rekordy = [r for r in dane_rejestru
-                           if str(_pole(r, 'Handlowiec')).strip() == wybrany_handlowiec]
+                           if _handlowiec_wiersza(r) == wybrany_handlowiec]
 
             if not rekordy:
                 st.info("Brak ofert przypisanych do tego handlowca.")
@@ -2540,7 +2558,7 @@ with tab_rejestr:
                         st.markdown(
                             f"**{_pole(r, 'Nr oferty', 'Numer oferty', 'Nr') or '(bez numeru)'}**  \n"
                             f"<span style='color:#4A5568; font-size:0.85rem'>"
-                            f"{_pole(r, 'Data')} · {_pole(r, 'Handlowiec')}</span>",
+                            f"{_pole(r, 'Data')} · {_handlowiec_wiersza(r)}</span>",
                             unsafe_allow_html=True)
                     with c2:
                         st.markdown(
