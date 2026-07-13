@@ -1187,12 +1187,43 @@ def pobierz_cennik():
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def pobierz_rejestr():
+    """
+    (v2.1) Odporne czytanie Rejestru: zamiast get_all_records() (który wywala
+    błąd, gdy wiersz ma więcej kolumn niż nagłówek - np. po dodaniu DaneOferty
+    zanim dopisano nagłówek) budujemy rekordy ręcznie z get_all_values().
+    """
     _, gs_client = get_google_clients()
     try:
         sheet = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
-        return sheet.get_all_records()
+        wartosci = sheet.get_all_values()
+        if len(wartosci) < 2:
+            return []
+        naglowki = [str(h).strip() for h in wartosci[0]]
+        # Uzupełniamy brakujące/puste nagłówki technicznymi nazwami,
+        # a jeśli wierszy danych jest więcej kolumn niż nagłówków -
+        # dokładamy nagłówki (ostatnia "nadmiarowa" to zwykle DaneOferty).
+        max_kolumn = max(len(w) for w in wartosci)
+        while len(naglowki) < max_kolumn:
+            naglowki.append("DaneOferty" if len(naglowki) == max_kolumn - 1 else f"Kolumna_{len(naglowki) + 1}")
+        naglowki = [h if h else f"Kolumna_{i + 1}" for i, h in enumerate(naglowki)]
+        rekordy = []
+        for wiersz in wartosci[1:]:
+            wiersz = list(wiersz) + [""] * (len(naglowki) - len(wiersz))
+            rekordy.append(dict(zip(naglowki, wiersz)))
+        return rekordy
     except Exception:
         return []
+
+
+@st.cache_resource(show_spinner=False)
+def install_fonts_once():
+    """
+    (v2.1) install_fonts() odpalał proces systemowy fc-cache przy KAŻDYM
+    przerysowaniu strony (czyli po każdym kliknięciu w selectbox) - to było
+    główne źródło "zamrażania" aplikacji. Teraz czcionki instalują się raz.
+    """
+    install_fonts()
+    return True
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -1222,9 +1253,11 @@ def pobierz_handlowcow():
                 "pipedrive_token": str(row.get("PipedriveToken", "")).strip(),
                 "rola": str(row.get("Rola", "handlowiec")).strip().lower() or "handlowiec",
             }
-        return wynik if wynik else HANDLOWCY_FALLBACK
+        if wynik:
+            return wynik, True   # dane z arkusza
+        return HANDLOWCY_FALLBACK, False
     except Exception:
-        return HANDLOWCY_FALLBACK
+        return HANDLOWCY_FALLBACK, False
 
 
 def odswiez_wszystkie_dane():
@@ -1241,7 +1274,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-install_fonts()
+install_fonts_once()
 
 # Ładujemy logo
 import base64 as _b64_css
@@ -1583,7 +1616,7 @@ header[data-testid="stHeader"] {
 # zapytań do Google przy każdym przerysowaniu strony.
 service, client = get_google_clients()
 pliki_na_dysku = pobierz_pliki_szablonow()
-HANDLOWCY = pobierz_handlowcow()
+HANDLOWCY, HANDLOWCY_Z_ARKUSZA = pobierz_handlowcow()
 
 try:
     df_cennik = pobierz_cennik()
@@ -1628,7 +1661,9 @@ with st.sidebar:
     wybrany_handlowiec = st.selectbox("Kto przygotowuje ofertę?", list(HANDLOWCY.keys()),
                                       index=_eidx(HANDLOWCY.keys(), ED.get('handlowiec')))
     dane_handlowca_biezacego = HANDLOWCY[wybrany_handlowiec]
-    jest_adminem = dane_handlowca_biezacego.get("rola", "handlowiec") == "admin"
+    # (v2.1) Dopóki nie istnieje zakładka 'Handlowcy' w arkuszu, nie ma ról -
+    # wszyscy widzą pełny rejestr (dokładnie jak w starej wersji aplikacji).
+    jest_adminem = (not HANDLOWCY_Z_ARKUSZA) or dane_handlowca_biezacego.get("rola", "handlowiec") == "admin"
 
     # (v2) Prosty system logowania PIN.
     # Aktywuje się TYLKO, gdy handlowiec ma ustawiony PIN w zakładce "Handlowcy".
@@ -1916,6 +1951,43 @@ with tab_kreator:
         else:
             st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
+    # ==========================================================
+    # (v2.1) TEKST WSTĘPU - podgląd i ręczna edycja przed PDF-em
+    # Działa jak wizualizacja: klikasz "Generuj tekst", AI proponuje
+    # treść, a Ty możesz ją dowolnie poprawić w polu poniżej.
+    # Do PDF-a trafia DOKŁADNIE to, co widzisz w tym polu.
+    # Jeśli pole zostawisz puste - tekst wygeneruje się automatycznie
+    # w momencie tworzenia PDF (zachowanie jak dotychczas).
+    # ==========================================================
+    st.markdown("---")
+    st.markdown("### ✍️ Tekst wstępu (strona 2 oferty)")
+    st.session_state.setdefault('wstep_editor', '')
+
+    col_w1, col_w2 = st.columns([1, 3])
+    with col_w1:
+        if st.button("🪄 GENERUJ TEKST WSTĘPU", disabled=not zalogowany):
+            _autor_imie = "Adam Trepka"
+            _autor_stan = HANDLOWCY.get(_autor_imie, {}).get("stanowisko", "CEO It`s Wrap")
+            _folia_do_wstepu = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
+            with st.spinner("AI pisze wstęp..."):
+                st.session_state['wstep_editor'] = generate_ai_intro_text(
+                    klient, final_brand, final_model, pakiet, _folia_do_wstepu,
+                    _autor_imie, _autor_stan
+                )
+            st.rerun()
+        if st.session_state.get('wstep_editor', '').strip():
+            if st.button("🗑️ Wyczyść (auto przy PDF)"):
+                st.session_state['wstep_editor'] = ''
+                st.rerun()
+    with col_w2:
+        wstep_recznie = st.text_area(
+            "Treść wstępu - możesz edytować przed wygenerowaniem PDF",
+            key='wstep_editor',
+            height=220,
+            placeholder=("Pole puste = wstęp wygeneruje się automatycznie podczas tworzenia PDF.\n"
+                         "Kliknij 'GENERUJ TEKST WSTĘPU', aby zobaczyć i poprawić treść przed ofertą.")
+        )
+
     if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany):
         if 'ai_img' not in st.session_state:
             st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
@@ -1939,10 +2011,16 @@ with tab_kreator:
                     # Fallback gdyby Adam Trepka został usunięty/przemianowany w słowniku
                     AUTOR_WSTEPU_STANOWISKO = "CEO It`s Wrap"
                 
-                wygenerowany_wstep = generate_ai_intro_text(
-                    klient, final_brand, final_model, pakiet, final_foil_text,
-                    AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO
-                )
+                # (v2.1) Priorytet ma tekst z pola edycji (jeśli handlowiec go
+                # wygenerował/poprawił). Puste pole = automat, jak dotychczas.
+                _wstep_z_edytora = st.session_state.get('wstep_editor', '').strip()
+                if _wstep_z_edytora:
+                    wygenerowany_wstep = _wstep_z_edytora
+                else:
+                    wygenerowany_wstep = generate_ai_intro_text(
+                        klient, final_brand, final_model, pakiet, final_foil_text,
+                        AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO
+                    )
 
                 cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
                 cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
