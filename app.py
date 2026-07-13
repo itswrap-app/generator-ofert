@@ -5,7 +5,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-import io, os, subprocess, re, shutil, requests, base64
+import io, os, subprocess, re, shutil, requests, base64, json, uuid
 from pypdf import PdfWriter
 from datetime import datetime
 from PIL import Image
@@ -15,27 +15,38 @@ import random
 LINK_DO_ARKUSZA = "https://docs.google.com/spreadsheets/d/1USF81hOinAP_vvz1QZuoNyRCT1ezJcXTDDB6RjuYtrY/edit"
 PARENT_FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
 
+# Co ile sekund odświeżać dane z Google (cennik, szablony, rejestr, handlowcy).
+# Dzięki cache aplikacja NIE odpytuje Google przy każdym kliknięciu/wpisaniu litery.
+CACHE_TTL = 600
+
 # --- BAZA OPIEKUNÓW / HANDLOWCÓW ---
-HANDLOWCY = {
+# FALLBACK: używana TYLKO gdy w arkuszu nie ma zakładki "Handlowcy".
+# Docelowo handlowców edytujesz w arkuszu (zakładka "Handlowcy"), kolumny:
+# Handlowiec | Stanowisko | Telefon | Email | PIN | PipedriveToken | Rola
+HANDLOWCY_FALLBACK = {
     "Adam Trepka": {
         "stanowisko": "CEO It`s Wrap",
         "telefon": "+48 505 008877",
-        "email": "adam@itswrap.pl"
+        "email": "adam@itswrap.pl",
+        "pin": "", "pipedrive_token": "", "rola": "admin"
     },
     "Adam Homulicki": {
         "stanowisko": "Account Manager",
         "telefon": "+48 698433834",
-        "email": "adam.homulicki@itswrap.pl"
+        "email": "adam.homulicki@itswrap.pl",
+        "pin": "", "pipedrive_token": "", "rola": "handlowiec"
     },
-     "Jakub Gerber": {
+    "Jakub Gerber": {
         "stanowisko": "Account Manager",
         "telefon": "+48 606523486",
-        "email": "jakub.gerber@itswrap.pl"
+        "email": "jakub.gerber@itswrap.pl",
+        "pin": "", "pipedrive_token": "", "rola": "handlowiec"
     },
-     "Daniel Heina": {
+    "Daniel Heina": {
         "stanowisko": "CEO It`s Wrap",
         "telefon": "+48 609608400",
-        "email": "daniel@itswrap.pl"
+        "email": "daniel@itswrap.pl",
+        "pin": "", "pipedrive_token": "", "rola": "admin"
     }
 }
 
@@ -108,6 +119,7 @@ FOIL_GROUPS = {
             "Czerwony Hotrod Połysk (G13) - Gloss Hotrod Red",
             "Palony Pomarańcz Połysk (G14) - Gloss Burnt Orange",
             "Jasnożółty Połysk (G15) - Gloss Bright Yellow",
+            "Zielony Jasny Połysk (G16) - Gloss Light Green",
             "Głęboki Pomarańcz Połysk (G24) - Gloss Deep Orange",
             "Słonecznikowy Połysk (G25) - Gloss Sunflower",
             "Intensywny Niebieski Połysk (G47) - Gloss Intense Blue",
@@ -414,6 +426,12 @@ def _crop_to_target_ratio(img_bytes):
 
 
 def generate_ai_image(car_description, color_description, reference_images=None):
+    """
+    ZMIANA (v2): w razie błędu funkcja zwraca None zamiast szarego obrazka.
+    Dzięki temu handlowiec NIE MOŻE nieświadomie wysłać klientowi oferty
+    z szarym prostokątem zamiast auta - poprzednia wizualizacja zostaje,
+    a błąd jest wyraźnie komunikowany.
+    """
     api_key = st.secrets["GEMINI_API_KEY"]
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
@@ -490,19 +508,19 @@ def generate_ai_image(car_description, color_description, reference_images=None)
         
         if response.status_code != 200:
             st.error(f"API zwróciło błąd ({response.status_code}): {response.text[:800]}")
-            return _fallback_image()
+            return None
         
         data = response.json()
         
         if 'candidates' not in data or len(data['candidates']) == 0:
             st.error(f"API nie zwróciło obrazu. Pełna odpowiedź: {str(data)[:800]}")
-            return _fallback_image()
+            return None
         
         candidate = data['candidates'][0]
         
         if candidate.get('finishReason') in ('SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST'):
             st.error(f"Generacja zablokowana przez safety filter: {candidate.get('finishReason')}")
-            return _fallback_image()
+            return None
         
         content_parts = candidate.get('content', {}).get('parts', [])
         for part in content_parts:
@@ -517,21 +535,14 @@ def generate_ai_image(car_description, color_description, reference_images=None)
                 text_response += part['text'] + "\n"
         
         st.error(f"Model nie zwrócił obrazu. Odpowiedź modelu: {text_response[:500] or 'brak'}")
-        return _fallback_image()
+        return None
         
     except requests.exceptions.Timeout:
         st.error("Timeout - model nie odpowiedział w 120 sekund. Spróbuj ponownie.")
-        return _fallback_image()
+        return None
     except Exception as e:
         st.error(f"Błąd komunikacji z modelem: {e}")
-        return _fallback_image()
-
-
-def _fallback_image():
-    img_fallback = Image.new('RGB', (2100, 1870), color=(15, 15, 18))
-    out_fallback = io.BytesIO()
-    img_fallback.save(out_fallback, format='PNG')
-    return out_fallback.getvalue()
+        return None
 
 
 def _wolacz_regulowy_fallback(imie):
@@ -884,7 +895,7 @@ def pptx_to_pdf(input_path):
     except: return None
 
 
-def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca):
+def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca, lista_handlowcow):
     """
     Wybiera ostatnią stronę oferty spersonalizowaną pod konkretnego handlowca.
     
@@ -897,6 +908,9 @@ def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca):
     
     Porównanie nazw jest case-insensitive i ignoruje znaki interpunkcyjne typu "_"/" ",
     więc "6_Oferta_ostatnia_Adam Trepka.pptx" pasuje do handlowca "Adam Trepka".
+    
+    (v2: lista_handlowcow przekazywana jako parametr, bo handlowcy mogą
+    pochodzić z arkusza Google, a nie ze stałej w kodzie)
     """
     def _normalizuj(tekst):
         # ujednolicamy do małych liter, zamiana _ na spację, usuwamy podwójne spacje
@@ -914,7 +928,7 @@ def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca):
     # 2. Fallback - ogólny plik bez imienia (np. "6_Oferta_ostatnia.pptx")
     #    Wybieramy najkrótszy plik 6_ (zwykle ogólny ma najkrótszą nazwę)
     pliki_ogolne = [f for f in pliki_6 if not any(
-        _normalizuj(h) in _normalizuj(f['name']) for h in HANDLOWCY.keys()
+        _normalizuj(h) in _normalizuj(f['name']) for h in lista_handlowcow
     )]
     if pliki_ogolne:
         return sorted(pliki_ogolne, key=lambda x: len(x['name']))[0]
@@ -1031,12 +1045,18 @@ def wgraj_pdf_na_dysk(oauth_service, folder_id, file_name, file_bytes):
         return None
 
 
-def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena, pdf_link):
+def zapisz_do_rejestru(nr_oferty, handlowiec, klient, auto, usluga, folia, cena, pdf_link, dane_json=""):
+    """
+    (v2) Dodatkowy parametr dane_json - pełne parametry oferty zapisywane
+    w kolumnie 'DaneOferty' (ostatnia kolumna Rejestru). Dzięki temu ofertę
+    można później wczytać do edycji jednym kliknięciem.
+    """
     try:
         sheet_rejestr = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
         dzisiaj = datetime.now().strftime("%Y-%m-%d")
-        nowy_wiersz = [dzisiaj, nr_oferty, handlowiec, klient, auto, usluga, folia, f"{cena} zł", "Nowa", pdf_link]
+        nowy_wiersz = [dzisiaj, nr_oferty, handlowiec, klient, auto, usluga, folia, f"{cena} zł", "Nowa", pdf_link, dane_json]
         sheet_rejestr.append_row(nowy_wiersz)
+        pobierz_rejestr.clear()  # odśwież cache rejestru, żeby nowa oferta była widoczna od razu
         return True
     except Exception as e:
         st.error(f"Nie udało się zapisać do bazy (Rejestr): {e}")
@@ -1064,6 +1084,154 @@ def replace_text_in_shape(shape, replacements):
     if shape.shape_type == 6:
         for subshape in shape.shapes:
             replace_text_in_shape(subshape, replacements)
+
+
+# ==========================================================================
+# (v2) PIPEDRIVE - szansa sprzedaży + załączony PDF
+# ==========================================================================
+PIPEDRIVE_API = "https://api.pipedrive.com/v1"
+
+
+def pipedrive_znajdz_lub_utworz_osobe(token, nazwa):
+    """Szuka osoby po nazwie; jeśli nie istnieje - tworzy nową.
+    Zwraca (person_id, czy_istniala) lub (None, False) przy błędzie."""
+    try:
+        r = requests.get(f"{PIPEDRIVE_API}/persons/search",
+                         params={"term": nazwa, "api_token": token,
+                                 "fields": "name", "exact_match": "false", "limit": 1},
+                         timeout=30)
+        if r.ok:
+            items = (r.json().get("data") or {}).get("items") or []
+            if items:
+                return items[0]["item"]["id"], True
+        r = requests.post(f"{PIPEDRIVE_API}/persons",
+                          params={"api_token": token}, json={"name": nazwa}, timeout=30)
+        if r.ok and r.json().get("success"):
+            return r.json()["data"]["id"], False
+        st.warning(f"Pipedrive (osoba): {r.text[:300]}")
+    except Exception as e:
+        st.warning(f"Pipedrive (osoba): {e}")
+    return None, False
+
+
+def pipedrive_utworz_szanse(token, tytul, person_id, wartosc):
+    """Tworzy szansę sprzedaży (deal). Zwraca deal_id lub None."""
+    try:
+        payload = {"title": tytul, "value": round(float(wartosc), 2), "currency": "PLN"}
+        if person_id:
+            payload["person_id"] = person_id
+        r = requests.post(f"{PIPEDRIVE_API}/deals",
+                          params={"api_token": token}, json=payload, timeout=30)
+        if r.ok and r.json().get("success"):
+            return r.json()["data"]["id"]
+        st.warning(f"Pipedrive (szansa): {r.text[:300]}")
+    except Exception as e:
+        st.warning(f"Pipedrive (szansa): {e}")
+    return None
+
+
+def pipedrive_zalacz_pdf(token, deal_id, file_bytes, file_name):
+    """Fizycznie załącza plik PDF do szansy sprzedaży."""
+    try:
+        r = requests.post(f"{PIPEDRIVE_API}/files",
+                          params={"api_token": token},
+                          data={"deal_id": deal_id},
+                          files={"file": (file_name, file_bytes, "application/pdf")},
+                          timeout=60)
+        if r.ok and r.json().get("success"):
+            return True
+        st.warning(f"Pipedrive (plik): {r.text[:300]}")
+    except Exception as e:
+        st.warning(f"Pipedrive (plik): {e}")
+    return False
+
+
+# ==========================================================================
+# (v2) POŁĄCZENIA I DANE Z GOOGLE - CACHE
+# To jest lekarstwo na zawieszanie się aplikacji po każdym wpisanym polu:
+# Streamlit wykonuje cały skrypt od nowa po każdej interakcji, a wcześniej
+# przy każdym takim przebiegu autoryzował się w Google i pobierał cennik
+# oraz listę plików. Teraz robi to raz na CACHE_TTL sekund.
+# ==========================================================================
+@st.cache_resource(show_spinner=False)
+def get_google_clients():
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    )
+    service = build('drive', 'v3', credentials=creds)
+    gs_client = gspread.authorize(creds)
+    return service, gs_client
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_pliki_szablonow():
+    service, _ = get_google_clients()
+    results = service.files().list(
+        q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false",
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
+    ).execute()
+    return results.get('files', [])
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_cennik():
+    _, gs_client = get_google_clients()
+    sheet_cennik = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Cennik usług")
+    dane = sheet_cennik.get_all_values()
+    naglowki = [c.replace('\n', ' ').replace('\r', '').strip() for c in dane[0]]
+    return pd.DataFrame(dane[1:], columns=naglowki)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_rejestr():
+    _, gs_client = get_google_clients()
+    try:
+        sheet = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
+        return sheet.get_all_records()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_handlowcow():
+    """
+    (v2) Handlowcy z zakładki 'Handlowcy' w arkuszu Google.
+    Wymagane kolumny (1. wiersz arkusza):
+    Handlowiec | Stanowisko | Telefon | Email | PIN | PipedriveToken | Rola
+    - PIN: puste = brak logowania dla tej osoby (jak dotychczas)
+    - PipedriveToken: osobisty token API z Pipedrive (Ustawienia -> Personal preferences -> API)
+    - Rola: 'admin' widzi wszystkie oferty, 'handlowiec' tylko swoje
+    Gdy zakładki nie ma - fallback do listy z kodu (pełna kompatybilność wstecz).
+    """
+    _, gs_client = get_google_clients()
+    try:
+        sheet = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Handlowcy")
+        wynik = {}
+        for row in sheet.get_all_records():
+            nazwa = str(row.get("Handlowiec", "")).strip()
+            if not nazwa:
+                continue
+            wynik[nazwa] = {
+                "stanowisko": str(row.get("Stanowisko", "")).strip(),
+                "telefon": str(row.get("Telefon", "")).strip(),
+                "email": str(row.get("Email", "")).strip(),
+                "pin": str(row.get("PIN", "")).strip(),
+                "pipedrive_token": str(row.get("PipedriveToken", "")).strip(),
+                "rola": str(row.get("Rola", "handlowiec")).strip().lower() or "handlowiec",
+            }
+        return wynik if wynik else HANDLOWCY_FALLBACK
+    except Exception:
+        return HANDLOWCY_FALLBACK
+
+
+def odswiez_wszystkie_dane():
+    pobierz_pliki_szablonow.clear()
+    pobierz_cennik.clear()
+    pobierz_rejestr.clear()
+    pobierz_handlowcow.clear()
 
 
 # --- APLIKACJA ---
@@ -1411,25 +1579,30 @@ header[data-testid="stHeader"] {
 </style>
 """, unsafe_allow_html=True)
 
-creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
-service = build('drive', 'v3', credentials=creds)
-client = gspread.authorize(creds)
-
-results = service.files().list(
-    q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false",
-    fields="files(id, name)",
-    supportsAllDrives=True,
-    includeItemsFromAllDrives=True
-).execute()
-pliki_na_dysku = results.get('files', [])
+# (v2) Wszystkie połączenia i dane pobierane przez cache - zero zbędnych
+# zapytań do Google przy każdym przerysowaniu strony.
+service, client = get_google_clients()
+pliki_na_dysku = pobierz_pliki_szablonow()
+HANDLOWCY = pobierz_handlowcow()
 
 try:
-    sheet_cennik = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Cennik usług")
-    naglowki = [c.replace('\n', ' ').replace('\r', '').strip() for c in sheet_cennik.get_all_values()[0]]
-    df_cennik = pd.DataFrame(sheet_cennik.get_all_values()[1:], columns=naglowki)
+    df_cennik = pobierz_cennik()
 except Exception as e:
     st.error(f"Błąd ładowania Cennika v3. Upewnij się, że link i nazwa zakładki 'Cennik usług' są poprawne. Błąd: {e}")
     st.stop()
+
+# (v2) Dane oferty wczytanej do edycji (z zakładki Ewidencja)
+ED = st.session_state.get('edycja', {})
+
+
+def _eidx(options, val, default=0):
+    """(v2) Bezpieczny index do selectboxów - używany przy wczytywaniu
+    zapisanej oferty do edycji. Gdy wartości nie ma na liście, wraca default."""
+    options = list(options)
+    try:
+        return options.index(val)
+    except (ValueError, TypeError):
+        return default if 0 <= default < len(options) else 0
 
 
 # --- PANEL BOCZNY ---
@@ -1452,48 +1625,78 @@ with st.sidebar:
         """, unsafe_allow_html=True)
     
     st.markdown("### Opiekun Klienta")
-    wybrany_handlowiec = st.selectbox("Kto przygotowuje ofertę?", list(HANDLOWCY.keys()))
+    wybrany_handlowiec = st.selectbox("Kto przygotowuje ofertę?", list(HANDLOWCY.keys()),
+                                      index=_eidx(HANDLOWCY.keys(), ED.get('handlowiec')))
+    dane_handlowca_biezacego = HANDLOWCY[wybrany_handlowiec]
+    jest_adminem = dane_handlowca_biezacego.get("rola", "handlowiec") == "admin"
+
+    # (v2) Prosty system logowania PIN.
+    # Aktywuje się TYLKO, gdy handlowiec ma ustawiony PIN w zakładce "Handlowcy".
+    # Puste pole PIN w arkuszu = brak logowania (zachowanie jak dotychczas).
+    zalogowany = True
+    if dane_handlowca_biezacego.get("pin"):
+        pin_wpisany = st.text_input("🔑 PIN", type="password", key=f"pin_{wybrany_handlowiec}")
+        zalogowany = (pin_wpisany == dane_handlowca_biezacego["pin"])
+        if pin_wpisany and not zalogowany:
+            st.error("Błędny PIN.")
+        elif not pin_wpisany:
+            st.info("Podaj PIN, aby generować oferty.")
+
+    if st.button("🔄 Odśwież dane z arkusza"):
+        odswiez_wszystkie_dane()
+        st.rerun()
     
     st.markdown("---")
     st.markdown("### Studio AI")
-    brand = st.selectbox("Marka", list(CAR_DATABASE.keys()))
+    brand = st.selectbox("Marka", list(CAR_DATABASE.keys()),
+                         index=_eidx(CAR_DATABASE.keys(), ED.get('brand')))
     
     if brand == "Inna marka...":
-        custom_brand = st.text_input("Wpisz markę")
-        custom_model = st.text_input("Wpisz model")
+        custom_brand = st.text_input("Wpisz markę", value=ED.get('final_brand', ''))
+        custom_model = st.text_input("Wpisz model", value=ED.get('final_model', ''))
         final_brand, final_model, body, segment_domyslny = custom_brand, custom_model, "", "Segment D"
     else:
         final_brand = brand
-        final_model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()))
-        body = st.selectbox("Nadwozie", CAR_DATABASE[brand][final_model])
+        final_model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()),
+                                   index=_eidx(CAR_DATABASE[brand].keys(), ED.get('final_model')))
+        body = st.selectbox("Nadwozie", CAR_DATABASE[brand][final_model],
+                            index=_eidx(CAR_DATABASE[brand][final_model], ED.get('body')))
         segment_domyslny = SEGMENTY_DOMYSLNE.get(brand, {}).get(final_model, "Segment D")
         
-    segment_final = st.selectbox("Wybierz Segment (do wyceny)", ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"], 
-                                 index=["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"].index(segment_domyslny))
+    _segmenty_opcje = ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"]
+    segment_final = st.selectbox("Wybierz Segment (do wyceny)", _segmenty_opcje,
+                                 index=_eidx(_segmenty_opcje, ED.get('segment', segment_domyslny),
+                                             default=_segmenty_opcje.index(segment_domyslny)))
         
-    year = st.selectbox("Rocznik", [str(y) for y in range(2026, 1999, -1)])
-    gen_code = st.text_input("Kod karoserii (Opcjonalnie)", help="Np. G70, 992")
+    _lata_opcje = [str(y) for y in range(2026, 1999, -1)]
+    year = st.selectbox("Rocznik", _lata_opcje, index=_eidx(_lata_opcje, ED.get('year')))
+    gen_code = st.text_input("Kod karoserii (Opcjonalnie)", value=ED.get('gen_code', ''), help="Np. G70, 992")
     
     st.markdown("---")
     st.markdown("### Folia i Kolor")
-    f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()))
-    f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()))
+    f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()),
+                           index=_eidx(FOIL_GROUPS.keys(), ED.get('f_brand')))
+    f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()),
+                         index=_eidx(FOIL_GROUPS[f_brand].keys(), ED.get('f_cat')))
     
     # Tryb "Inne" - handlowiec wpisuje nazwę folii ręcznie, kategoria w cenniku
     # odblokowuje się w pełni (bo nie wiemy do której kategorii należy "egzotyczna" folia)
     if f_brand == "Inne (wpisz ręcznie)":
         custom_foil = st.text_input(
             "Nazwa folii (wpisz)",
+            value=ED.get('f_color', '') if ED.get('f_brand') == "Inne (wpisz ręcznie)" else '',
             placeholder="np. SUNTEK PPF, Hexis Skintac, własna nazwa...",
             help="Wpisz dowolną nazwę folii. Po wybraniu 'Inne' w cenniku pojawiają się wszystkie kategorie."
         )
         f_color = custom_foil if custom_foil.strip() else "Folia niestandardowa"
     else:
-        f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat])
+        f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat],
+                               index=_eidx(FOIL_GROUPS[f_brand][f_cat], ED.get('f_color')))
 
     paint_color = ""
     if "Bezbarwne" in f_cat:
-        paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta", value="Czarny metallic")
+        paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta",
+                                    value=ED.get('paint_color', "Czarny metallic"))
 
     st.markdown("---")
     st.markdown("### Wizualizacja AI")
@@ -1514,7 +1717,7 @@ with st.sidebar:
         help="Bezpośredni link do obrazka .jpg/.png ze strony producenta"
     )
 
-    if st.button("🪄 GENERUJ WIZUALIZACJĘ AI", type="primary"):
+    if st.button("🪄 GENERUJ WIZUALIZACJĘ AI", type="primary", disabled=not zalogowany):
         extra_code = f" ({gen_code})" if gen_code else ""
         car_description = (
             f"{year} {final_brand} {final_model}{extra_code}, body type: {body}. "
@@ -1579,11 +1782,15 @@ with st.sidebar:
             )
             if img_data:
                 st.session_state['ai_img'] = img_data
+            else:
+                # (v2) Nie nadpisujemy poprzedniej wizualizacji szarym obrazkiem.
+                st.warning("Nie wygenerowano nowej wizualizacji. Poprzednia (jeśli była) pozostaje bez zmian.")
                 
     st.markdown("---")
     st.markdown("### Dodatki do oferty")
     dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
-    wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name']) if st.checkbox(d['name'], value=False)]
+    wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name'])
+                       if st.checkbox(d['name'], value=(d['name'] in ED.get('dodatki', [])), key=f"dod_{d['id']}")]
 
 
 # ZAKŁADKI W GŁÓWNYM PANELU
@@ -1598,11 +1805,40 @@ with tab_kreator:
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # (v2) Baner trybu edycji
+    if ED:
+        col_ed1, col_ed2 = st.columns([3, 1])
+        with col_ed1:
+            st.info(f"✏️ **Tryb edycji oferty {ED.get('nr_o', '')}** ({ED.get('klient', '')}) - "
+                    f"zmień co trzeba i wygeneruj PDF ponownie. Nowa wersja zostanie dopisana do rejestru.")
+        with col_ed2:
+            if st.button("❌ Zakończ edycję"):
+                st.session_state.pop('edycja', None)
+                st.rerun()
+
     col1, col2 = st.columns(2)
 
     with col1:
-        klient = st.text_input("Imię i Nazwisko Klienta")
-        nr_o = st.text_input("Numer oferty", value=f"IW/{datetime.now().strftime('%Y/%m/%d')}/01")
+        klient = st.text_input("Imię i Nazwisko Klienta", value=ED.get('klient', ''))
+
+        # (v2) Weryfikacja klienta w bazie - działa na danych z cache,
+        # więc NIE powoduje żadnych dodatkowych zapytań ani zawieszeń.
+        if klient.strip() and not ED:
+            _rej = pobierz_rejestr()
+            _trafienia = [r for r in _rej
+                          if str(r.get('Klient', '')).strip().lower() == klient.strip().lower()]
+            if _trafienia:
+                _ost = _trafienia[-1]
+                st.warning(
+                    f"⚠️ Klient **{klient}** jest już w rejestrze "
+                    f"(ostatnia oferta: {_ost.get('Nr oferty', '?')} z {_ost.get('Data', '?')}, "
+                    f"handlowiec: {_ost.get('Handlowiec', '?')}). "
+                    f"Jeśli chcesz kontynuować tamtą ofertę, wczytaj ją w zakładce Ewidencja."
+                )
+
+        nr_o = st.text_input("Numer oferty",
+                             value=ED.get('nr_o', f"IW/{datetime.now().strftime('%Y/%m/%d')}/01"))
         
         # Filtrowanie kategorii w cenniku na podstawie wybranego producenta folii
         # (XPEL -> tylko PPF, 3M/Avery/Arlon/Oracal -> tylko Zmiana koloru, Inne -> wszystkie)
@@ -1627,9 +1863,9 @@ with tab_kreator:
                 )
                 kategorie = kategorie_wszystkie
         
-        kategoria = st.selectbox("Kategoria", kategorie)
+        kategoria = st.selectbox("Kategoria", kategorie, index=_eidx(kategorie, ED.get('kategoria')))
         uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
-        pakiet = st.selectbox("Usługa", uslugi_kat)
+        pakiet = st.selectbox("Usługa", uslugi_kat, index=_eidx(uslugi_kat, ED.get('pakiet')))
         
         try:
             wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
@@ -1642,15 +1878,37 @@ with tab_kreator:
                 cena_domyslna = 0.0
         except:
             cena_domyslna = 0.0
+        
+        # (v2) Cicha cena 0.0 bywa przeoczana - dajemy delikatne ostrzeżenie
+        if cena_domyslna == 0.0:
+            st.caption("⚠️ Nie znaleziono ceny w cenniku dla tej kombinacji usługi i segmentu - wpisz cenę ręcznie poniżej.")
 
         st.markdown("---")
         st.write("💰 **Kalkulacja cenowa**")
         
-        cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować", value=cena_domyslna, step=100.0)
-        rabat = st.number_input("Rabat dla klienta (PLN)", value=0.0, step=100.0)
+        cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować",
+                                      value=float(ED.get('cena_manual', cena_domyslna)), step=100.0)
+        rabat = st.number_input("Rabat dla klienta (PLN)",
+                                value=float(ED.get('rabat', 0.0)), step=100.0)
         cena_koncowa = cena_manual - rabat
         
         st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
+
+        # (v2) PIPEDRIVE - opcja dodania szansy sprzedaży
+        _pd_token = dane_handlowca_biezacego.get("pipedrive_token", "")
+        _pd_dostepny = bool(_pd_token)
+        dodaj_do_pipedrive = st.checkbox(
+            "📤 Dodaj jako szansę sprzedaży w Pipedrive (z załączonym PDF)",
+            value=_pd_dostepny,
+            disabled=not _pd_dostepny,
+            help="Utworzy osobę (jeśli nie istnieje), szansę sprzedaży przypisaną do Ciebie i załączy PDF oferty."
+        )
+        if not _pd_dostepny:
+            st.caption(
+                f"ℹ️ Pipedrive nieaktywny dla: {wybrany_handlowiec}. "
+                f"Uzupełnij kolumnę **PipedriveToken** w zakładce 'Handlowcy' arkusza Google "
+                f"(token znajdziesz w Pipedrive: Ustawienia → Personal preferences → API)."
+            )
 
     with col2:
         if 'ai_img' in st.session_state:
@@ -1658,7 +1916,7 @@ with tab_kreator:
         else:
             st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
 
-    if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF"):
+    if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany):
         if 'ai_img' not in st.session_state:
             st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
         else:
@@ -1793,7 +2051,7 @@ with tab_kreator:
                 # NOWE: ostatnia strona spersonalizowana pod handlowca
                 # Plik z prefixem "6_" i imieniem handlowca w nazwie (np. "6_Oferta_ostatnia_Adam Trepka")
                 # Fallback: pierwszy ogólny plik "6_" gdy spersonalizowanej wersji nie ma
-                koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec)
+                koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec, list(HANDLOWCY.keys()))
 
                 seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
                 seq = [f for f in seq if f]
@@ -1812,29 +2070,78 @@ with tab_kreator:
                         for shape in slide.shapes:
                             replace_text_in_shape(shape, replacements)
 
-                    tmp_p = f"tmp_{f_info['id']}.pptx"
+                    # (v2) Unikalne nazwy plików tymczasowych - bezpieczne, gdy
+                    # dwóch handlowców generuje oferty w tym samym momencie.
+                    tmp_p = f"tmp_{uuid.uuid4().hex[:8]}_{f_info['id']}.pptx"
                     prs.save(tmp_p)
                     pdf = pptx_to_pdf(tmp_p)
                     if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
 
                 final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+                pdf_bytes = final_io.getvalue()
                 nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
                 
                 oauth_drive = get_oauth_drive_service()
                 if oauth_drive:
                     folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
-                    utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, final_io.getvalue())
+                    utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, pdf_bytes)
                 else:
                     utworzony_link = None
                     st.warning("OAuth Drive niedostępny - PDF nie został zapisany w chmurze. Pobierz plik lokalnie poniżej.")
                 
                 link_do_zapisu = utworzony_link if utworzony_link else "Błąd uploadu"
 
-                if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu):
+                # (v2) Pełne parametry oferty do późniejszej edycji (kolumna DaneOferty)
+                dane_oferty_json = json.dumps({
+                    "handlowiec": wybrany_handlowiec,
+                    "klient": klient,
+                    "nr_o": nr_o,
+                    "brand": brand,
+                    "final_brand": final_brand,
+                    "final_model": final_model,
+                    "body": body,
+                    "segment": segment_final,
+                    "year": year,
+                    "gen_code": gen_code,
+                    "f_brand": f_brand,
+                    "f_cat": f_cat,
+                    "f_color": f_color,
+                    "paint_color": paint_color,
+                    "kategoria": kategoria,
+                    "pakiet": pakiet,
+                    "cena_manual": cena_manual,
+                    "rabat": rabat,
+                    "dodatki": [d['name'] for d in wybrane_dodatki],
+                }, ensure_ascii=False)
+
+                if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu, dane_oferty_json):
                     st.success(f"✅ Oferta zapisana w systemie CRM! Plik został zachowany w folderze 'Oferty'.")
+
+                # (v2) PIPEDRIVE - osoba -> szansa -> załączony PDF
+                if dodaj_do_pipedrive and _pd_dostepny:
+                    with st.spinner("Dodaję szansę sprzedaży w Pipedrive..."):
+                        person_id, osoba_istniala = (None, False)
+                        if klient.strip():
+                            person_id, osoba_istniala = pipedrive_znajdz_lub_utworz_osobe(_pd_token, klient.strip())
+                        deal_id = pipedrive_utworz_szanse(
+                            _pd_token,
+                            f"{nr_o} | {final_brand} {final_model} | {pakiet}",
+                            person_id,
+                            cena_koncowa
+                        )
+                        if deal_id:
+                            if pipedrive_zalacz_pdf(_pd_token, deal_id, pdf_bytes, nazwa_pliku_wyjsciowego):
+                                st.success(
+                                    f"📤 Pipedrive: szansa #{deal_id} utworzona "
+                                    f"({'istniejąca osoba' if osoba_istniala else 'nowa osoba'}), PDF załączony."
+                                )
+                            else:
+                                st.warning(f"Pipedrive: szansa #{deal_id} utworzona, ale załączenie PDF nie powiodło się.")
+                        else:
+                            st.warning("Pipedrive: nie udało się utworzyć szansy sprzedaży - sprawdź token API.")
                     
                 st.balloons()
-                st.download_button("📥 POBIERZ OFERTĘ PDF LOKALNIE", data=final_io, file_name=nazwa_pliku_wyjsciowego)
+                st.download_button("📥 POBIERZ OFERTĘ PDF LOKALNIE", data=pdf_bytes, file_name=nazwa_pliku_wyjsciowego)
 
 with tab_rejestr:
     st.markdown("""
@@ -1846,35 +2153,103 @@ with tab_rejestr:
     </div>
     """, unsafe_allow_html=True)
     try:
-        sheet_rejestr_view = client.open_by_url(LINK_DO_ARKUSZA).worksheet("Rejestr")
-        dane_rejestru = sheet_rejestr_view.get_all_records()
+        dane_rejestru = pobierz_rejestr()
         if dane_rejestru:
             df_rejestr = pd.DataFrame(dane_rejestru)
-            
-            nazwa_kolumny_link = df_rejestr.columns[-1]
-            
-            st.data_editor(
-                df_rejestr,
-                column_config={
-                    nazwa_kolumny_link: st.column_config.LinkColumn(
-                        "Plik PDF", help="Kliknij aby pobrać dokument ofertowy z dysku", display_text="Otwórz dokument"
+
+            # (v2) Handlowiec widzi tylko swoje oferty; admin widzi wszystkie.
+            # Działa dopiero gdy zakładka 'Handlowcy' istnieje i ma role -
+            # bez niej wszyscy z fallbacku mają wgląd zgodny ze swoją rolą.
+            if not jest_adminem and 'Handlowiec' in df_rejestr.columns:
+                df_rejestr_widok = df_rejestr[df_rejestr['Handlowiec'] == wybrany_handlowiec].copy()
+            else:
+                df_rejestr_widok = df_rejestr.copy()
+
+            # (v2) Kolumny DaneOferty nie pokazujemy w tabeli (to techniczny JSON)
+            df_widok = df_rejestr_widok.drop(columns=['DaneOferty'], errors='ignore')
+
+            if not df_widok.empty:
+                nazwa_kolumny_link = df_widok.columns[-1]
+
+                st.data_editor(
+                    df_widok,
+                    column_config={
+                        nazwa_kolumny_link: st.column_config.LinkColumn(
+                            "Plik PDF", help="Kliknij aby pobrać dokument ofertowy z dysku", display_text="Otwórz dokument"
+                        )
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                csv = df_widok.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="⬇️ Pobierz ewidencję jako CSV",
+                    data=csv,
+                    file_name=f"Rejestr_Ofert_ITSWRAP_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime='text/csv',
+                )
+
+                # ==========================================================
+                # (v2) EDYCJA ZAPISANEJ OFERTY
+                # Wybierasz ofertę z listy -> "Wczytaj do edycji" -> wszystkie
+                # pola w Kreatorze i panelu bocznym wypełniają się zapisanymi
+                # wartościami. Zmieniasz np. kolor lub cenę i generujesz nowy PDF.
+                # ==========================================================
+                st.markdown("---")
+                st.markdown("### ✏️ Edytuj zapisaną ofertę")
+                oferty_edytowalne = [
+                    r for r in dane_rejestru
+                    if str(r.get('DaneOferty', '')).strip().startswith('{')
+                    and (jest_adminem or str(r.get('Handlowiec', '')) == wybrany_handlowiec)
+                ]
+                if oferty_edytowalne:
+                    opcje_edycji = {
+                        f"{r.get('Nr oferty', '?')}  |  {r.get('Klient', '(bez nazwy)')}  |  {r.get('Data', '?')}": r
+                        for r in reversed(oferty_edytowalne)
+                    }
+                    wybor_oferty = st.selectbox("Wybierz ofertę", list(opcje_edycji.keys()))
+                    if st.button("📂 WCZYTAJ DO EDYCJI"):
+                        try:
+                            st.session_state['edycja'] = json.loads(opcje_edycji[wybor_oferty]['DaneOferty'])
+                            # Wizualizację trzeba wygenerować na nowo (nie przechowujemy obrazów w arkuszu)
+                            st.session_state.pop('ai_img', None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Nie udało się wczytać danych oferty: {e}")
+                else:
+                    st.info(
+                        "Brak ofert możliwych do edycji. Edycja działa dla ofert wygenerowanych "
+                        "w nowej wersji systemu (wymagana kolumna **DaneOferty** w arkuszu 'Rejestr')."
                     )
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            csv = df_rejestr.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="⬇️ Pobierz ewidencję jako CSV",
-                data=csv,
-                file_name=f"Rejestr_Ofert_ITSWRAP_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime='text/csv',
-            )
+            else:
+                st.info("Brak ofert przypisanych do tego handlowca.")
         else:
             st.info("Rejestr jest pusty lub arkusz nie zawiera jeszcze wpisów.")
     except Exception as e:
         st.warning(f"Brak możliwości wczytania rejestru. Pamiętaj, by w nagłówkach bazy (Arkusz 'Rejestr', 1 wiersz) dodać kolumnę na link do PDF. Błąd: {e}")
+
+    # (v2) Panel admina - podgląd handlowców z arkusza
+    if jest_adminem:
+        with st.expander("👑 Panel admina - handlowcy, PIN-y i tokeny Pipedrive"):
+            st.write(
+                "Dane pochodzą z zakładki **Handlowcy** w arkuszu Google (kolumny: "
+                "`Handlowiec | Stanowisko | Telefon | Email | PIN | PipedriveToken | Rola`). "
+                "Edytujesz bezpośrednio w arkuszu, potem klikasz **Odśwież dane z arkusza** w panelu bocznym."
+            )
+            df_handlowcy = pd.DataFrame([
+                {
+                    "Handlowiec": nazwa,
+                    "Stanowisko": d.get("stanowisko", ""),
+                    "Telefon": d.get("telefon", ""),
+                    "Email": d.get("email", ""),
+                    "PIN": "•••" if d.get("pin") else "(brak - bez logowania)",
+                    "Pipedrive": "✅ aktywny" if d.get("pipedrive_token") else "❌ brak tokenu",
+                    "Rola": d.get("rola", "handlowiec"),
+                }
+                for nazwa, d in HANDLOWCY.items()
+            ])
+            st.dataframe(df_handlowcy, hide_index=True, use_container_width=True)
 
 st.markdown("""
 <div class="iw-footer">
