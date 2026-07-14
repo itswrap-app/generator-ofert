@@ -900,7 +900,7 @@ def pptx_to_pdf(input_path):
     except: return None
 
 
-def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca, lista_handlowcow):
+def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca, lista_handlowcow, prefix='6'):
     """
     Wybiera ostatnią stronę oferty spersonalizowaną pod konkretnego handlowca.
     
@@ -922,7 +922,7 @@ def wybierz_strone_koncowa(pliki_na_dysku, imie_handlowca, lista_handlowcow):
         return re.sub(r'\s+', ' ', tekst.lower().replace('_', ' ')).strip()
     
     imie_norm = _normalizuj(imie_handlowca)
-    pliki_6 = [f for f in pliki_na_dysku if f['name'].startswith('6')]
+    pliki_6 = [f for f in pliki_na_dysku if f['name'].lower().startswith(prefix.lower())]
     
     # 1. Szukamy dopasowania po imieniu handlowca
     for f in pliki_6:
@@ -1119,12 +1119,14 @@ def pipedrive_znajdz_lub_utworz_osobe(token, nazwa):
     return None, False
 
 
-def pipedrive_utworz_szanse(token, tytul, person_id, wartosc, stage_id=None):
+def pipedrive_utworz_szanse(token, tytul, person_id, wartosc, stage_id=None, org_id=None):
     """Tworzy szansę sprzedaży (deal). Zwraca deal_id lub None."""
     try:
         payload = {"title": tytul, "value": round(float(wartosc), 2), "currency": "PLN"}
         if person_id:
             payload["person_id"] = person_id
+        if org_id:
+            payload["org_id"] = org_id
         if stage_id:
             payload["stage_id"] = stage_id
         r = requests.post(f"{PIPEDRIVE_API}/deals",
@@ -1403,6 +1405,10 @@ def odswiez_wszystkie_dane():
     pobierz_rejestr.clear()
     pobierz_handlowcow.clear()
     pobierz_folie.clear()
+    try:
+        pobierz_cennik_b2b.clear()
+    except Exception:
+        pass
 
 
 # ==========================================================================
@@ -1479,6 +1485,373 @@ def zapisz_handlowca(nazwa, stanowisko, telefon, email, pin, token, rola):
     ws.append_row(wiersz_danych)
     pobierz_handlowcow.clear()
     return "dodano"
+
+
+
+# ==========================================================================
+# (v3.0) SYSTEM B2B - REKLAMA / FLOTA
+# Cennik domyślny odwzorowany z pliku cennik_reklamowe.xlsx
+# (odblask osobowe/półdostawcze: poprawione 32 -> 320 zł/m²; OWV: 150 zł/m²)
+# ==========================================================================
+ZAKRESY_B2B = ["1/3 powierzchni", "1/2 powierzchni", "3/4 powierzchni", "100% (druk full)"]
+
+CENY_B2B_DOMYSLNE = {
+    "Folia barwiona (Oracal 551)": 180.0,
+    "Polimer drukowany": 180.0,
+    "Wylewana IJ180 drukowana": 265.0,
+    "Wylewana bezbarwna (druk bez poddruku)": 265.0,
+    "Wylewana bezbarwna (druk z poddrukiem białym)": 280.0,
+    "Folia odblaskowa drukowana": 320.0,
+    "OWV na szyby": 150.0,
+}
+
+METRAZ_B2B_DOMYSLNY = {
+    "Osobowe": {"1/3 powierzchni": 6, "1/2 powierzchni": 16, "3/4 powierzchni": 25, "100% (druk full)": 30},
+    "Półdostawcze": {"1/3 powierzchni": 8, "1/2 powierzchni": 18, "3/4 powierzchni": 28, "100% (druk full)": 34},
+    "Bus": {"1/3 powierzchni": 8, "1/2 powierzchni": 14, "3/4 powierzchni": 31, "100% (druk full)": 38},
+}
+
+DODATKI_M2_B2B_DOMYSLNE = {"Długi bus": 4, "Wysoki bus": 8, "Dach": 8}
+PLOTOWANIE_CENA_B2B_DOMYSLNA = 50.0
+
+# Mapowanie folii B2B -> słowo kluczowe w nazwie pliku szablonu na Dysku
+# (pliki kart produktowych: B2B_2_<slowo>..., np. B2B_2_IJ180.pptx)
+FOLIE_B2B_SZABLONY = {
+    "Folia barwiona (Oracal 551)": "oracal",
+    "Polimer drukowany": "polimer",
+    "Wylewana IJ180 drukowana": "ij180",
+    "Wylewana bezbarwna (druk bez poddruku)": "bezbarwna",
+    "Wylewana bezbarwna (druk z poddrukiem białym)": "bezbarwna",
+    "Folia odblaskowa drukowana": "odblask",
+    "OWV na szyby": "owv",
+}
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_cennik_b2b():
+    """
+    (v3.0) Cennik B2B z arkusza:
+    - zakładka 'Cennik B2B':  Folia | Cena za m2   (+ wiersz 'Plotowanie / wycinanie')
+    - zakładka 'Metraż B2B':  Typ auta | Pozycja | m2
+      Pozycja = zakres ('1/3 powierzchni' itd.) albo dodatek ('Długi bus', 'Wysoki bus', 'Dach')
+    Gdy zakładek brak -> wartości domyślne z kodu.
+    Zwraca: (ceny, metraz, dodatki_m2, plot_cena, czy_z_arkusza)
+    """
+    _, gs_client = get_google_clients()
+    try:
+        ss = gs_client.open_by_url(LINK_DO_ARKUSZA)
+        ws_c = ss.worksheet("Cennik B2B")
+        ws_m = ss.worksheet("Metraż B2B")
+        ceny, metraz, dodatki = {}, {}, {}
+        plot_cena = PLOTOWANIE_CENA_B2B_DOMYSLNA
+        for w in ws_c.get_all_values()[1:]:
+            w = list(w) + ["", ""]
+            nazwa, cena_raw = str(w[0]).strip(), str(w[1]).strip().replace(",", ".")
+            if not nazwa or not cena_raw:
+                continue
+            try:
+                cena = float(re.sub(r"[^\d.]", "", cena_raw))
+            except Exception:
+                continue
+            if "plotowanie" in nazwa.lower() or "wycinanie" in nazwa.lower():
+                plot_cena = cena
+            else:
+                ceny[nazwa] = cena
+        for w in ws_m.get_all_values()[1:]:
+            w = list(w) + ["", "", ""]
+            typ, pozycja, m2_raw = str(w[0]).strip(), str(w[1]).strip(), str(w[2]).strip().replace(",", ".")
+            if not typ or not pozycja or not m2_raw:
+                continue
+            try:
+                m2 = float(re.sub(r"[^\d.]", "", m2_raw))
+            except Exception:
+                continue
+            if pozycja in ZAKRESY_B2B:
+                metraz.setdefault(typ, {})[pozycja] = m2
+            else:
+                dodatki[pozycja] = m2
+        if ceny and metraz:
+            return ceny, metraz, (dodatki or DODATKI_M2_B2B_DOMYSLNE), plot_cena, True
+        return CENY_B2B_DOMYSLNE, METRAZ_B2B_DOMYSLNY, DODATKI_M2_B2B_DOMYSLNE, PLOTOWANIE_CENA_B2B_DOMYSLNA, False
+    except Exception:
+        return CENY_B2B_DOMYSLNE, METRAZ_B2B_DOMYSLNY, DODATKI_M2_B2B_DOMYSLNE, PLOTOWANIE_CENA_B2B_DOMYSLNA, False
+
+
+def utworz_cennik_b2b_i_importuj():
+    """(v3.0) Tworzy zakładki 'Cennik B2B' i 'Metraż B2B' i wgrywa dane domyślne."""
+    ws_c, _ = _pobierz_lub_utworz_zakladke("Cennik B2B", ["Folia", "Cena za m2"], rows=50, cols=4)
+    wiersze_c = [["Folia", "Cena za m2"]]
+    for f, c in CENY_B2B_DOMYSLNE.items():
+        wiersze_c.append([f, str(c)])
+    wiersze_c.append(["Plotowanie / wycinanie", str(PLOTOWANIE_CENA_B2B_DOMYSLNA)])
+    ws_c.update(values=wiersze_c, range_name="A1")
+
+    ws_m, _ = _pobierz_lub_utworz_zakladke("Metraż B2B", ["Typ auta", "Pozycja", "m2"], rows=60, cols=4)
+    wiersze_m = [["Typ auta", "Pozycja", "m2"]]
+    for typ, zak in METRAZ_B2B_DOMYSLNY.items():
+        for z, m in zak.items():
+            wiersze_m.append([typ, z, str(m)])
+    for d, m in DODATKI_M2_B2B_DOMYSLNE.items():
+        wiersze_m.append(["Bus", d, str(m)])
+    ws_m.update(values=wiersze_m, range_name="A1")
+    pobierz_cennik_b2b.clear()
+
+
+def zapisz_cene_b2b(folia, cena):
+    """(v3.0) Aktualizuje cenę folii B2B lub dodaje nową (zakładka 'Cennik B2B')."""
+    ws, _ = _pobierz_lub_utworz_zakladke("Cennik B2B", ["Folia", "Cena za m2"], rows=50, cols=4)
+    wartosci = ws.get_all_values()
+    for i, w in enumerate(wartosci[1:], start=2):
+        if len(w) > 0 and str(w[0]).strip().lower() == folia.strip().lower():
+            ws.update(values=[[folia.strip(), str(cena)]], range_name=f"A{i}:B{i}")
+            pobierz_cennik_b2b.clear()
+            return "zaktualizowano"
+    ws.append_row([folia.strip(), str(cena)])
+    pobierz_cennik_b2b.clear()
+    return "dodano"
+
+
+def zapisz_metraz_b2b(typ, pozycja, m2):
+    """(v3.0) Aktualizuje/dodaje pozycję metrażu B2B (zakładka 'Metraż B2B')."""
+    ws, _ = _pobierz_lub_utworz_zakladke("Metraż B2B", ["Typ auta", "Pozycja", "m2"], rows=60, cols=4)
+    wartosci = ws.get_all_values()
+    for i, w in enumerate(wartosci[1:], start=2):
+        if len(w) > 1 and str(w[0]).strip() == typ.strip() and str(w[1]).strip() == pozycja.strip():
+            ws.update(values=[[typ.strip(), pozycja.strip(), str(m2)]], range_name=f"A{i}:C{i}")
+            pobierz_cennik_b2b.clear()
+            return "zaktualizowano"
+    ws.append_row([typ.strip(), pozycja.strip(), str(m2)])
+    pobierz_cennik_b2b.clear()
+    return "dodano"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def pipedrive_szukaj_organizacji(token, fraza):
+    """(v3.0) Wyszukuje firmy (organizacje) w Pipedrive: [{'id','name','adres'}]."""
+    fraza = str(fraza).strip()
+    if len(fraza) < 2:
+        return []
+    try:
+        r = requests.get(f"{PIPEDRIVE_API}/organizations/search",
+                         params={"term": fraza, "api_token": token,
+                                 "fields": "name", "limit": 5},
+                         timeout=15)
+        if not (r.ok and r.json().get("success")):
+            return []
+        items = (r.json().get("data") or {}).get("items") or []
+        wynik = []
+        for it in items[:3]:
+            o = it.get("item") or {}
+            if not o.get("id"):
+                continue
+            wynik.append({"id": o["id"], "name": o.get("name", ""),
+                          "adres": o.get("address", "") or ""})
+        return wynik
+    except Exception:
+        return []
+
+
+def pipedrive_znajdz_lub_utworz_org(token, nazwa):
+    """(v3.0) Zwraca (org_id, czy_istniala) - szuka firmy, w razie braku tworzy."""
+    try:
+        znalezione = pipedrive_szukaj_organizacji(token, nazwa)
+        if znalezione:
+            return znalezione[0]["id"], True
+        r = requests.post(f"{PIPEDRIVE_API}/organizations",
+                          params={"api_token": token}, json={"name": nazwa}, timeout=30)
+        if r.ok and r.json().get("success"):
+            return r.json()["data"]["id"], False
+    except Exception as e:
+        st.warning(f"Pipedrive (firma): {e}")
+    return None, False
+
+
+def _ai_obraz_z_promptu(prompt, obrazy=None):
+    """
+    (v3.0) Generyczne wywołanie gemini-2.5-flash-image: prompt + opcjonalna
+    lista obrazów [(bytes, mime), ...]. Zwraca przycięte PNG albo None.
+    Używane przez warianty okładki B2B.
+    """
+    api_key = st.secrets["GEMINI_API_KEY"]
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
+    parts = [{"text": prompt}]
+    for img_bytes, mime in (obrazy or []):
+        parts.append({"inline_data": {"mime_type": mime or "image/jpeg",
+                                      "data": base64.b64encode(img_bytes).decode("utf-8")}})
+    payload = {"contents": [{"parts": parts}],
+               "generationConfig": {"responseModalities": ["IMAGE"], "temperature": 0.4}}
+    try:
+        r = requests.post(url, headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                          json=payload, timeout=120)
+        if r.status_code != 200:
+            st.error(f"API obrazów: błąd {r.status_code}: {r.text[:500]}")
+            return None
+        data = r.json()
+        kand = (data.get("candidates") or [{}])[0]
+        if kand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
+            st.error(f"Generacja zablokowana: {kand.get('finishReason')}")
+            return None
+        for part in kand.get("content", {}).get("parts", []):
+            inline = part.get("inlineData") or part.get("inline_data")
+            if inline and inline.get("data"):
+                return _crop_to_target_ratio(base64.b64decode(inline["data"]))
+        st.error("Model nie zwrócił obrazu.")
+        return None
+    except Exception as e:
+        st.error(f"Błąd komunikacji z modelem: {e}")
+        return None
+
+
+def oszacuj_m2_z_projektu(img_bytes, mime, typ_pojazdu, zakres, metraz_ref):
+    """
+    (v3.0) AI szacuje ilość m² folii na podstawie projektu/siatki.
+    Uwzględnia druk z rolek 1,37 m / 1,52 m (zapas na szerokość rolki i spady).
+    Zwraca dict {'m2': float, 'komentarz': str} albo None.
+    """
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        return None
+    ref_opis = ", ".join(f"{z}: {m} m²" for z, m in (metraz_ref or {}).items())
+    prompt = (
+        "Jesteś ekspertem produkcji oklejeń reklamowych pojazdów. Na podstawie załączonego "
+        "projektu (wizualizacja lub siatka pojazdu na płasko) oszacuj ilość m² folii z drukiem "
+        "potrzebną do realizacji.\n\n"
+        f"Typ pojazdu: {typ_pojazdu}. Wybrany zakres oklejania: {zakres}.\n"
+        f"Referencyjne zużycie folii dla tego typu pojazdu (z naszego cennika): {ref_opis}.\n\n"
+        "ZASADY:\n"
+        "- Druk odbywa się z rolek o szerokości 1,37 m lub 1,52 m - dolicz realny zapas "
+        "na szerokość rolki, spady i dopasowanie brytów (zwykle +10-15% względem czystej powierzchni grafiki).\n"
+        "- Oceń z projektu, jaka część powierzchni pojazdu jest faktycznie pokryta grafiką, "
+        "i skoryguj wartość referencyjną w górę lub w dół.\n"
+        "- Wynik zaokrąglij do 0,5 m².\n\n"
+        "Odpowiedz WYŁĄCZNIE czystym JSON (bez markdownu): "
+        '{"m2": <liczba>, "komentarz": "<1-2 zdania uzasadnienia po polsku>"}'
+    )
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        payload = {
+            "contents": [{"parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime or "image/jpeg",
+                                 "data": base64.b64encode(img_bytes).decode("utf-8")}}
+            ]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300,
+                                 "thinkingConfig": {"thinkingBudget": 0}}
+        }
+        r = requests.post(url, headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                          json=payload, timeout=45)
+        if not r.ok:
+            return None
+        tekst = ""
+        for p in (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", []):
+            if p.get("text"):
+                tekst += p["text"]
+        tekst = tekst.strip().replace("```json", "").replace("```", "").strip()
+        dane = json.loads(tekst)
+        return {"m2": float(dane.get("m2", 0)), "komentarz": str(dane.get("komentarz", ""))}
+    except Exception:
+        return None
+
+
+def _fallback_intro_b2b(firma, pojazd, autor_imie, autor_stanowisko):
+    firma_txt = firma.strip() or "Państwa firmy"
+    tresc = (
+        "Szanowni Państwo,\n\n"
+        "[WSTĘP AWARYJNY - generacja AI niedostępna]\n"
+        f"przekazuję ofertę na reklamowe oklejenie pojazdu {pojazd or ''} dla {firma_txt}. "
+        "Projekt zrealizujemy w sprawdzonej technologii druku na materiałach 3M, łącząc "
+        "skuteczną reklamę mobilną z ochroną lakieru pojazdu."
+    )
+    return f"{tresc}\n\nZ motoryzacyjnym pozdrowieniem\n{autor_imie}\n{autor_stanowisko}"
+
+
+def generate_ai_intro_text_b2b(firma, pojazd, zakres_opis, folie_lista, autor_imie, autor_stanowisko):
+    """(v3.0) Wstęp do oferty B2B w tonie 'Szanowni Państwo' (wzór: oferta Sprinter)."""
+    wolacz = "Szanowni Państwo"
+    ma_bialy = any("biał" in f.lower() for f in folie_lista)
+    ma_bezbarwna = any("bezbarwn" in f.lower() for f in folie_lista)
+    folie_txt = ", ".join(folie_lista) if folie_lista else "folii z drukiem"
+    kontekst = (
+        f"Autor: {autor_imie}, {autor_stanowisko}, firma ITS WRAP (profesjonalne oklejanie "
+        f"reklamowe pojazdów i flot, technologia druku HP Latex, materiały 3M).\n"
+        f"Klient (firma): {firma or 'firma klienta'}\n"
+        f"Pojazd: {pojazd or 'pojazd firmowy'}\n"
+        f"Zakres: {zakres_opis}\n"
+        f"Materiały: {folie_txt}\n"
+        f"Druk z poddrukiem białym HP Latex: {'TAK - podkreśl intensywność i nasycenie barw grafiki' if ma_bialy else 'nie'}\n"
+        f"Folia bezbarwna (ochrona lakieru): {'TAK - podkreśl ochronę lakieru i wartość rezydualną' if ma_bezbarwna else 'nie'}"
+    )
+    prompt = f"""Napisz krótki wstęp do oferty handlowej B2B na reklamowe oklejenie pojazdu firmowego.
+
+KONTEKST:
+{kontekst}
+
+STRUKTURA (OBOWIĄZKOWA):
+Linia 1: "{wolacz},"
+Linia 2: (pusta)
+Linia 3+: treść - DOKŁADNIE 3-4 zdania.
+
+ZASADY:
+- Odpowiedz WYŁĄCZNIE treścią (bez preambuły, markdownu, cudzysłowów, emoji).
+- NIE dodawaj podpisu ani formuły pożegnalnej - zostaną dodane automatycznie.
+- Wspomnij pojazd i charakter realizacji (reklama mobilna dla firmy).
+- Jedna konkretna korzyść biznesowa (widoczność marki / ochrona lakieru i wartości pojazdu / trwałość grafiki).
+- Ton: profesjonalny, konkretny, forma "Państwo".
+- ZAKAZANE frazy: "bezkompromisowe rozwiązanie", "najwyższa jakość", "spokój ducha", "na długie lata".
+
+Napisz teraz wstęp (zacznij od "{wolacz},"):"""
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        payload = {"contents": [{"parts": [{"text": prompt}]}],
+                   "generationConfig": {"temperature": 0.9, "maxOutputTokens": 1024,
+                                        "thinkingConfig": {"thinkingBudget": 0}}}
+        r = requests.post(url, headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                          json=payload, timeout=30)
+        if not r.ok:
+            return _fallback_intro_b2b(firma, pojazd, autor_imie, autor_stanowisko)
+        kand = (r.json().get("candidates") or [{}])[0]
+        tekst = "".join(p.get("text", "") for p in kand.get("content", {}).get("parts", [])).strip()
+        if len(tekst) < 80:
+            return _fallback_intro_b2b(firma, pojazd, autor_imie, autor_stanowisko)
+        # utnij ewentualny podpis wygenerowany przez model
+        linie_wyn = []
+        for linia in tekst.split("\n"):
+            l = linia.strip().lower()
+            if any(l.startswith(f) for f in ("z motoryzacyjnym", "z poważaniem", "pozdrawiam",
+                                             "z wyrazami", "serdecznie pozdr", "łączę pozdr")):
+                break
+            linie_wyn.append(linia)
+        tekst = "\n".join(linie_wyn).strip()
+        if len(tekst) < 80:
+            return _fallback_intro_b2b(firma, pojazd, autor_imie, autor_stanowisko)
+        return f"{tekst}\n\nZ motoryzacyjnym pozdrowieniem\n{autor_imie}\n{autor_stanowisko}"
+    except Exception:
+        return _fallback_intro_b2b(firma, pojazd, autor_imie, autor_stanowisko)
+
+
+def okladka_standardowa_b2b(typ_pojazdu, pojazd_opis=""):
+    """
+    (v3.0) Wariant 4: standardowa grafika okładkowa.
+    1) Jeśli w repo aplikacji jest plik okladka_b2b.png / assets/okladka_b2b.png -> używamy go.
+    2) W przeciwnym razie AI generuje neutralny wrap w barwach ITS WRAP (bez tekstów i logo klienta).
+    """
+    for sciezka in ("okladka_b2b.png", "assets/okladka_b2b.png", "static/okladka_b2b.png"):
+        if os.path.exists(sciezka):
+            try:
+                with open(sciezka, "rb") as f:
+                    return _crop_to_target_ratio(f.read())
+            except Exception:
+                pass
+    prompt = (
+        f"Professional automotive studio photography of a {pojazd_opis or typ_pojazdu} commercial vehicle "
+        "wrapped in a modern abstract advertising design: dark navy blue base with dynamic light blue "
+        "geometric shapes and diagonal accents (colors: #042643 navy and #007DC5 blue). "
+        "Clean corporate fleet look. STRICTLY NO text, NO logos, NO lettering anywhere on the vehicle. "
+        f"Scene: {SCENE_DESCRIPTION}"
+    )
+    return _ai_obraz_z_promptu(prompt)
 
 
 # --- APLIKACJA ---
@@ -1836,6 +2209,9 @@ HANDLOWCY, HANDLOWCY_Z_ARKUSZA = pobierz_handlowcow()
 # kategorii cennika pochodzą z niej. Nowy kolor dodajesz wierszem w arkuszu.
 FOIL_GROUPS, KATEGORIE_DLA_PRODUCENTA, FOLIE_Z_ARKUSZA = pobierz_folie()
 
+# (v3.0) Cennik B2B (reklama/flota) - z arkusza lub domyślny z kodu
+CENY_B2B, METRAZ_B2B, DODATKI_M2_B2B, PLOTOWANIE_CENA_B2B, B2B_Z_ARKUSZA = pobierz_cennik_b2b()
+
 try:
     df_cennik = pobierz_cennik()
 except Exception as e:
@@ -1941,152 +2317,344 @@ with st.sidebar:
     if st.button("🔄 Odśwież dane z arkusza"):
         odswiez_wszystkie_dane()
         st.rerun()
-    
-    st.markdown("---")
-    st.markdown("### Studio AI")
-    brand = st.selectbox("Marka", list(CAR_DATABASE.keys()),
-                         index=_eidx(CAR_DATABASE.keys(), ED.get('brand')))
-    
-    if brand == "Inna marka...":
-        custom_brand = st.text_input("Wpisz markę", value=ED.get('final_brand', ''))
-        custom_model = st.text_input("Wpisz model", value=ED.get('final_model', ''))
-        final_brand, final_model, body, segment_domyslny = custom_brand, custom_model, "", "Segment D"
-    else:
-        final_brand = brand
-        final_model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()),
-                                   index=_eidx(CAR_DATABASE[brand].keys(), ED.get('final_model')))
-        body = st.selectbox("Nadwozie", CAR_DATABASE[brand][final_model],
-                            index=_eidx(CAR_DATABASE[brand][final_model], ED.get('body')))
-        segment_domyslny = SEGMENTY_DOMYSLNE.get(brand, {}).get(final_model, "Segment D")
-        
-    _segmenty_opcje = ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"]
-    segment_final = st.selectbox("Wybierz Segment (do wyceny)", _segmenty_opcje,
-                                 index=_eidx(_segmenty_opcje, ED.get('segment', segment_domyslny),
-                                             default=_segmenty_opcje.index(segment_domyslny)))
-        
-    _lata_opcje = [str(y) for y in range(2026, 1999, -1)]
-    year = st.selectbox("Rocznik", _lata_opcje, index=_eidx(_lata_opcje, ED.get('year')))
-    gen_code = st.text_input("Kod karoserii (Opcjonalnie)", value=ED.get('gen_code', ''), help="Np. G70, 992")
-    
-    st.markdown("---")
-    st.markdown("### Folia i Kolor")
-    f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()),
-                           index=_eidx(FOIL_GROUPS.keys(), ED.get('f_brand')))
-    f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()),
-                         index=_eidx(FOIL_GROUPS[f_brand].keys(), ED.get('f_cat')))
-    
-    # Tryb "Inne" - handlowiec wpisuje nazwę folii ręcznie, kategoria w cenniku
-    # odblokowuje się w pełni (bo nie wiemy do której kategorii należy "egzotyczna" folia)
-    if f_brand == "Inne (wpisz ręcznie)":
-        custom_foil = st.text_input(
-            "Nazwa folii (wpisz)",
-            value=ED.get('f_color', '') if ED.get('f_brand') == "Inne (wpisz ręcznie)" else '',
-            placeholder="np. SUNTEK PPF, Hexis Skintac, własna nazwa...",
-            help="Wpisz dowolną nazwę folii. Po wybraniu 'Inne' w cenniku pojawiają się wszystkie kategorie."
-        )
-        f_color = custom_foil if custom_foil.strip() else "Folia niestandardowa"
-    else:
-        f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat],
-                               index=_eidx(FOIL_GROUPS[f_brand][f_cat], ED.get('f_color')))
 
-    paint_color = ""
-    if "Bezbarwne" in f_cat:
-        paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta",
-                                    value=ED.get('paint_color', "Czarny metallic"))
-
+    # (v3.0) PRZEŁĄCZNIK TRYBU OFERTOWANIA - jedna aplikacja, dwa systemy
     st.markdown("---")
-    st.markdown("### Wizualizacja AI")
+    _tryby = ["🚗 B2C - Klient indywidualny", "🚛 B2B - Reklama / Flota"]
+    tryb_wybrany = st.radio("Tryb ofertowania", _tryby,
+                            index=(1 if ED.get('tryb') == 'B2B' else 0),
+                            key="tryb_ofertowania")
+    TRYB_B2B = tryb_wybrany.startswith("🚛")
     
-    st.caption(
-        "💡 **Rekomendacja:** wgraj 1-3 zdjęcia auta z konfiguratora producenta lub press-kitu "
-        "(różne ujęcia tego samego modelu). Model AI zachowa bryłę i zmieni tylko kolor na ciemny garaż."
-    )
-    
-    uploaded_files = st.file_uploader(
-        "Zdjęcia referencyjne (opcjonalnie, ale mocno zalecane dla nowych modeli)", 
-        type=['png', 'jpg', 'jpeg'], 
-        accept_multiple_files=True
-    )
-    
-    url_zdjecia = st.text_input(
-        "...lub wklej URL zdjęcia (np. z konfiguratora)",
-        help="Bezpośredni link do obrazka .jpg/.png ze strony producenta"
-    )
+    if TRYB_B2B:
+        # ==========================================================
+        # (v3.0) PANEL BOCZNY B2B - REKLAMA / FLOTA
+        # ==========================================================
+        st.markdown("---")
+        st.markdown("### Pojazd")
+        _typy_b2b = list(METRAZ_B2B.keys())
+        typ_pojazdu = st.selectbox("Typ pojazdu", _typy_b2b,
+                                   index=_eidx(_typy_b2b, ED.get('typ_pojazdu')))
+        pojazd_opis = st.text_input("Marka i model (do oferty)",
+                                    value=ED.get('pojazd_opis', ''),
+                                    placeholder="np. Mercedes Sprinter")
+        zakres_b2b = st.selectbox("Zakres oklejania (bez dachu)", ZAKRESY_B2B,
+                                  index=_eidx(ZAKRESY_B2B, ED.get('zakres_b2b')))
+        bus_dlugi = bus_wysoki = dach_b2b = False
+        if typ_pojazdu == "Bus":
+            bus_dlugi = st.checkbox(f"Długi (L)  (+{DODATKI_M2_B2B.get('Długi bus', 4):g} m²)",
+                                    value=bool(ED.get('bus_dlugi', False)))
+            bus_wysoki = st.checkbox(f"Wysoki (H)  (+{DODATKI_M2_B2B.get('Wysoki bus', 8):g} m²)",
+                                     value=bool(ED.get('bus_wysoki', False)))
+            dach_b2b = st.checkbox(f"Oklejanie dachu  (+{DODATKI_M2_B2B.get('Dach', 8):g} m²)",
+                                   value=bool(ED.get('dach_b2b', False)))
 
-    if st.button("🪄 GENERUJ WIZUALIZACJĘ AI", type="primary", disabled=not zalogowany):
-        extra_code = f" ({gen_code})" if gen_code else ""
-        car_description = (
-            f"{year} {final_brand} {final_model}{extra_code}, body type: {body}. "
-            f"This is a {segment_final.replace('Segment ', 'segment ')} vehicle."
-        )
-        
-        # Opis koloru dla AI - bierzemy "czystą" nazwę bez kodu w nawiasie
-        # (kod jak G12 jest niepotrzebny dla modelu obrazowego)
-        czysta_nazwa_koloru = _czysta_nazwa_folii(f_color)
-        
-        if "Bezbarwne" in f_cat:
-            if "Stealth" in f_color:
-                color_description = (
-                    f"the original {paint_color} factory paint covered with matte/satin transparent PPF film "
-                    f"(XPEL Stealth) giving the paint a deep matte finish while keeping the original color visible"
-                )
-            else:
-                color_description = (
-                    f"the original {paint_color} factory paint covered with high-gloss transparent PPF film "
-                    f"(XPEL Ultimate Plus) giving the paint extra depth and shine"
-                )
-        elif f_brand == "Inne (wpisz ręcznie)":
-            # Tryb własnej folii - nie wiemy jaki producent, opis bardziej ogólny
-            color_description = f"{czysta_nazwa_koloru} vinyl wrap"
-        else:
-            color_description = f"{czysta_nazwa_koloru} vinyl wrap by {f_brand}"
-        
-        reference_images = []
-        
-        if uploaded_files:
-            for uf in uploaded_files:
-                img_bytes = uf.read()
-                mime = uf.type if uf.type else "image/jpeg"
-                reference_images.append((img_bytes, mime))
-        
-        if url_zdjecia and url_zdjecia.strip():
-            try:
-                resp = requests.get(url_zdjecia.strip(), timeout=15, headers={
-                    'User-Agent': 'Mozilla/5.0'
-                })
-                if resp.status_code == 200:
-                    mime = resp.headers.get('content-type', 'image/jpeg').split(';')[0].strip()
-                    if 'image' in mime:
-                        reference_images.append((resp.content, mime))
+        st.markdown("---")
+        st.markdown("### Okładka oferty")
+        WARIANTY_OKLADKI = [
+            "1️⃣ Gotowa wizualizacja od klienta",
+            "2️⃣ Projekt na płasko (siatka) → AI robi 3D",
+            "3️⃣ Materiały klienta (logo/brand) → AI robi koncept",
+            "4️⃣ Grafika standardowa (brak materiałów)",
+        ]
+        wariant_okladki = st.radio("Skąd grafika na okładkę?", WARIANTY_OKLADKI,
+                                   index=_eidx(WARIANTY_OKLADKI, ED.get('wariant_okladki')))
+
+        _projekt_do_estymacji = None  # (bytes, mime) - do przycisku "Oszacuj m²"
+
+        if wariant_okladki.startswith("1"):
+            up_wiz = st.file_uploader("Wgraj wizualizację od klienta",
+                                      type=['png', 'jpg', 'jpeg', 'webp'], key="b2b_up_w1")
+            dopracuj_ai = st.checkbox("🪄 Dopracuj kadr przez AI (tło/kompozycja)", value=False)
+            if up_wiz is not None:
+                _bajty = up_wiz.getvalue()
+                _projekt_do_estymacji = (_bajty, up_wiz.type or "image/jpeg")
+                if st.button("📥 UŻYJ JAKO OKŁADKĘ", disabled=not zalogowany, key="b2b_uzyj_w1"):
+                    if dopracuj_ai:
+                        with st.spinner("AI dopracowuje kadr okładki..."):
+                            _img = _ai_obraz_z_promptu(
+                                "This is a client-approved vehicle wrap visualization. "
+                                "Recompose it into a clean, professional offer cover shot: adjust framing "
+                                "and background if needed, keep the vehicle, its wrap design, all logos and "
+                                "all text ABSOLUTELY UNCHANGED. Photorealistic.",
+                                [(_bajty, up_wiz.type or "image/jpeg")])
+                        if _img:
+                            st.session_state['ai_img'] = _img
+                            st.success("Okładka gotowa ✅")
                     else:
-                        st.warning(f"URL nie wskazuje na obrazek (typ: {mime}).")
+                        try:
+                            st.session_state['ai_img'] = _crop_to_target_ratio(_bajty)
+                            st.success("Okładka gotowa ✅ (przycięta do proporcji oferty)")
+                        except Exception as e:
+                            st.error(f"Nie udało się przetworzyć pliku: {e}")
+
+        elif wariant_okladki.startswith("2"):
+            up_siatka = st.file_uploader("Wgraj projekt na płasko (siatkę pojazdu)",
+                                         type=['png', 'jpg', 'jpeg', 'webp'], key="b2b_up_w2")
+            if up_siatka is not None:
+                _bajty = up_siatka.getvalue()
+                _projekt_do_estymacji = (_bajty, up_siatka.type or "image/jpeg")
+                if st.button("🪄 GENERUJ WIZUALIZACJĘ 3D Z SIATKI", disabled=not zalogowany, key="b2b_gen_w2"):
+                    with st.spinner("AI przerabia siatkę na wizualizację 3D..."):
+                        _img = _ai_obraz_z_promptu(
+                            "Attached is a FLAT vehicle wrap design template (vehicle net / siatka) showing "
+                            "the sides, front and rear of the vehicle laid out flat. "
+                            f"Render a photorealistic 3D {pojazd_opis or typ_pojazdu} with this EXACT design "
+                            "applied to the corresponding body panels. Keep every graphic element, color, "
+                            "logo and text from the template exactly as designed and correctly placed. "
+                            f"Scene: {SCENE_DESCRIPTION}",
+                            [(_bajty, up_siatka.type or "image/jpeg")])
+                    if _img:
+                        st.session_state['ai_img'] = _img
+                        st.success("Wizualizacja 3D gotowa ✅")
+
+        elif wariant_okladki.startswith("3"):
+            up_mat = st.file_uploader("Materiały klienta (logo, brandbook, zdjęcia - można kilka)",
+                                      type=['png', 'jpg', 'jpeg', 'webp'],
+                                      accept_multiple_files=True, key="b2b_up_w3")
+            wytyczne_koncept = st.text_input("Wytyczne (kolory firmowe, hasło, styl)",
+                                             placeholder="np. granat + limonka, dynamiczne pasy, hasło PROTECT.SECURE.")
+            if st.button("🪄 GENERUJ KONCEPT OKLEJENIA", disabled=not zalogowany, key="b2b_gen_w3"):
+                _obrazy = [(u.getvalue(), u.type or "image/png") for u in (up_mat or [])]
+                with st.spinner("AI projektuje koncepcję oklejenia..."):
+                    _img = _ai_obraz_z_promptu(
+                        "You are a vehicle wrap designer. Using the attached client brand materials "
+                        "(logo / brand imagery), design an attractive commercial advertising wrap concept for a "
+                        f"{pojazd_opis or typ_pojazdu}. Place the client's logo prominently and reproduce it as "
+                        "faithfully as possible. "
+                        + (f"Design guidelines from the client: {wytyczne_koncept}. " if wytyczne_koncept.strip() else "")
+                        + f"Render as photorealistic vehicle photo. Scene: {SCENE_DESCRIPTION}",
+                        _obrazy if _obrazy else None)
+                if _img:
+                    st.session_state['ai_img'] = _img
+                    st.success("Koncept gotowy ✅ (pamiętaj: to wizualizacja poglądowa, projekt produkcyjny robi grafik)")
+
+        else:  # wariant 4 - standard
+            st.caption("Użyjemy standardowej grafiki okładkowej ITS WRAP (plik okladka_b2b.png w repo "
+                       "aplikacji albo neutralny wrap wygenerowany przez AI - bez treści klienta).")
+            if st.button("🖼 USTAW OKŁADKĘ STANDARDOWĄ", disabled=not zalogowany, key="b2b_gen_w4"):
+                with st.spinner("Przygotowuję standardową okładkę..."):
+                    _img = okladka_standardowa_b2b(typ_pojazdu, pojazd_opis)
+                if _img:
+                    st.session_state['ai_img'] = _img
+                    st.success("Okładka standardowa ustawiona ✅")
+
+        # --- (v3.0) AI szacuje m² z projektu (rolki 1,37 / 1,52 m + zapas) ---
+        if _projekt_do_estymacji is not None:
+            if st.button("🤖 OSZACUJ m² Z PROJEKTU (AI)", disabled=not zalogowany, key="b2b_estymuj"):
+                with st.spinner("AI analizuje projekt i liczy metraż..."):
+                    _wynik = oszacuj_m2_z_projektu(_projekt_do_estymacji[0], _projekt_do_estymacji[1],
+                                                   typ_pojazdu, zakres_b2b,
+                                                   METRAZ_B2B.get(typ_pojazdu, {}))
+                if _wynik and _wynik.get('m2'):
+                    st.session_state['b2b_sugestia_m2'] = _wynik
                 else:
-                    st.warning(f"Nie mogę pobrać obrazka z URL (kod: {resp.status_code}).")
-            except Exception as e:
-                st.warning(f"Nie udało się pobrać zdjęcia z URL: {e}")
-        
-        if reference_images:
-            st.info(f"🎯 Tryb edycji: używam {len(reference_images)} zdjęcia/zdjęć referencyjnych auta.")
+                    st.warning("Nie udało się oszacować metrażu - wpisz m² ręcznie.")
+        if st.session_state.get('b2b_sugestia_m2'):
+            _s = st.session_state['b2b_sugestia_m2']
+            st.info(f"🤖 Sugestia AI: **{_s['m2']:g} m²** (z zapasem na rolki 1,37/1,52 m). {_s.get('komentarz', '')} "
+                    f"Wpisz wartość w polu m² wybranej folii poniżej.")
+
+        st.markdown("---")
+        st.markdown("### Folie i metraż")
+        st.caption("Można wybrać kilka folii - każda ma własne m². Metraż podpowiadany z cennika, "
+                   "zawsze edytowalny ręcznie. ⚠️ m² NIE pojawią się w ofercie PDF dla klienta.")
+        _folie_opcje = list(CENY_B2B.keys())
+        _folie_domyslne = [f for f in ED.get('folie', {}).keys() if f in _folie_opcje]
+        folie_b2b = st.multiselect("Rodzaje folii", _folie_opcje,
+                                   default=_folie_domyslne if _folie_domyslne else None)
+
+        # prefill m²/plotowania z edytowanej oferty (jednorazowo)
+        if ED.get('tryb') == 'B2B' and not st.session_state.get('_ed_b2b_done'):
+            for _f, _d in ED.get('folie', {}).items():
+                st.session_state[f"b2b_m2_{_f}"] = float(_d.get('m2', 0) or 0)
+                st.session_state[f"b2b_plot_{_f}"] = bool(_d.get('plot', False))
+            st.session_state['_ed_b2b_done'] = True
+
+        _dodatkowe_m2 = 0.0
+        if bus_dlugi: _dodatkowe_m2 += float(DODATKI_M2_B2B.get('Długi bus', 4))
+        if bus_wysoki: _dodatkowe_m2 += float(DODATKI_M2_B2B.get('Wysoki bus', 8))
+        if dach_b2b: _dodatkowe_m2 += float(DODATKI_M2_B2B.get('Dach', 8))
+
+        folie_dane = {}
+        for _i, _f in enumerate(folie_b2b):
+            _sug = float(METRAZ_B2B.get(typ_pojazdu, {}).get(zakres_b2b, 0)) + (_dodatkowe_m2 if _i == 0 else 0.0)
+            _klucz_m2 = f"b2b_m2_{_f}"
+            _kw = {} if _klucz_m2 in st.session_state else {"value": _sug}
+            _m2 = st.number_input(f"m² - {_f}" + ("  (folia główna: zawiera dodatki)" if _i == 0 and _dodatkowe_m2 else ""),
+                                  min_value=0.0, step=0.5, key=_klucz_m2, **_kw)
+            _klucz_pl = f"b2b_plot_{_f}"
+            _kwp = {} if _klucz_pl in st.session_state else {"value": False}
+            _plot = st.checkbox(f"Plotowanie / wycinanie - {_f}  (+{PLOTOWANIE_CENA_B2B:g} zł)",
+                                key=_klucz_pl, **_kwp)
+            folie_dane[_f] = {"m2": float(_m2), "plot": bool(_plot), "cena_m2": float(CENY_B2B[_f])}
+
+        st.markdown("---")
+        st.markdown("### Dodatki do oferty (slajdy)")
+        dodatki_b2b_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('B2B_4', 'B2B_5'))]
+        if dodatki_b2b_dostepne:
+            wybrane_dodatki_b2b = [d for d in sorted(dodatki_b2b_dostepne, key=lambda x: x['name'])
+                                   if st.checkbox(d['name'], value=(d['name'] in ED.get('dodatki', [])),
+                                                  key=f"dodb2b_{d['id']}")]
         else:
-            st.info("🎨 Tryb generacji: tworzę auto od zera na podstawie opisu (jakość może być niższa dla bardzo nowych modeli - rozważ dodanie zdjęcia referencyjnego).")
+            wybrane_dodatki_b2b = []
+            st.caption("Brak plików B2B_4_* / B2B_5_* na Dysku - dodatkowe slajdy pojawią się tu automatycznie.")
+    else:
+        st.markdown("---")
+        st.markdown("### Studio AI")
+        brand = st.selectbox("Marka", list(CAR_DATABASE.keys()),
+                             index=_eidx(CAR_DATABASE.keys(), ED.get('brand')))
+    
+        if brand == "Inna marka...":
+            custom_brand = st.text_input("Wpisz markę", value=ED.get('final_brand', ''))
+            custom_model = st.text_input("Wpisz model", value=ED.get('final_model', ''))
+            final_brand, final_model, body, segment_domyslny = custom_brand, custom_model, "", "Segment D"
+        else:
+            final_brand = brand
+            final_model = st.selectbox("Model", list(CAR_DATABASE[brand].keys()),
+                                       index=_eidx(CAR_DATABASE[brand].keys(), ED.get('final_model')))
+            body = st.selectbox("Nadwozie", CAR_DATABASE[brand][final_model],
+                                index=_eidx(CAR_DATABASE[brand][final_model], ED.get('body')))
+            segment_domyslny = SEGMENTY_DOMYSLNE.get(brand, {}).get(final_model, "Segment D")
         
-        with st.spinner("Gemini 2.5 Flash Image renderuje Twoje auto w ciemnym garażu LED..."):
-            img_data = generate_ai_image(
-                car_description=car_description,
-                color_description=color_description,
-                reference_images=reference_images if reference_images else None
+        _segmenty_opcje = ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J", "Wavecamper"]
+        segment_final = st.selectbox("Wybierz Segment (do wyceny)", _segmenty_opcje,
+                                     index=_eidx(_segmenty_opcje, ED.get('segment', segment_domyslny),
+                                                 default=_segmenty_opcje.index(segment_domyslny)))
+        
+        _lata_opcje = [str(y) for y in range(2026, 1999, -1)]
+        year = st.selectbox("Rocznik", _lata_opcje, index=_eidx(_lata_opcje, ED.get('year')))
+        gen_code = st.text_input("Kod karoserii (Opcjonalnie)", value=ED.get('gen_code', ''), help="Np. G70, 992")
+    
+        st.markdown("---")
+        st.markdown("### Folia i Kolor")
+        f_brand = st.selectbox("Producent", list(FOIL_GROUPS.keys()),
+                               index=_eidx(FOIL_GROUPS.keys(), ED.get('f_brand')))
+        f_cat = st.selectbox("Wykończenie", list(FOIL_GROUPS[f_brand].keys()),
+                             index=_eidx(FOIL_GROUPS[f_brand].keys(), ED.get('f_cat')))
+    
+        # Tryb "Inne" - handlowiec wpisuje nazwę folii ręcznie, kategoria w cenniku
+        # odblokowuje się w pełni (bo nie wiemy do której kategorii należy "egzotyczna" folia)
+        if f_brand == "Inne (wpisz ręcznie)":
+            custom_foil = st.text_input(
+                "Nazwa folii (wpisz)",
+                value=ED.get('f_color', '') if ED.get('f_brand') == "Inne (wpisz ręcznie)" else '',
+                placeholder="np. SUNTEK PPF, Hexis Skintac, własna nazwa...",
+                help="Wpisz dowolną nazwę folii. Po wybraniu 'Inne' w cenniku pojawiają się wszystkie kategorie."
             )
-            if img_data:
-                st.session_state['ai_img'] = img_data
+            f_color = custom_foil if custom_foil.strip() else "Folia niestandardowa"
+        else:
+            f_color = st.selectbox("Kolor", FOIL_GROUPS[f_brand][f_cat],
+                                   index=_eidx(FOIL_GROUPS[f_brand][f_cat], ED.get('f_color')))
+
+        paint_color = ""
+        if "Bezbarwne" in f_cat:
+            paint_color = st.text_input("🚘 Podaj obecny kolor lakieru auta",
+                                        value=ED.get('paint_color', "Czarny metallic"))
+
+        st.markdown("---")
+        st.markdown("### Wizualizacja AI")
+    
+        st.caption(
+            "💡 **Rekomendacja:** wgraj 1-3 zdjęcia auta z konfiguratora producenta lub press-kitu "
+            "(różne ujęcia tego samego modelu). Model AI zachowa bryłę i zmieni tylko kolor na ciemny garaż."
+        )
+    
+        uploaded_files = st.file_uploader(
+            "Zdjęcia referencyjne (opcjonalnie, ale mocno zalecane dla nowych modeli)", 
+            type=['png', 'jpg', 'jpeg'], 
+            accept_multiple_files=True
+        )
+    
+        url_zdjecia = st.text_input(
+            "...lub wklej URL zdjęcia (np. z konfiguratora)",
+            help="Bezpośredni link do obrazka .jpg/.png ze strony producenta"
+        )
+
+        if st.button("🪄 GENERUJ WIZUALIZACJĘ AI", type="primary", disabled=not zalogowany):
+            extra_code = f" ({gen_code})" if gen_code else ""
+            car_description = (
+                f"{year} {final_brand} {final_model}{extra_code}, body type: {body}. "
+                f"This is a {segment_final.replace('Segment ', 'segment ')} vehicle."
+            )
+        
+            # Opis koloru dla AI - bierzemy "czystą" nazwę bez kodu w nawiasie
+            # (kod jak G12 jest niepotrzebny dla modelu obrazowego)
+            czysta_nazwa_koloru = _czysta_nazwa_folii(f_color)
+        
+            if "Bezbarwne" in f_cat:
+                if "Stealth" in f_color:
+                    color_description = (
+                        f"the original {paint_color} factory paint covered with matte/satin transparent PPF film "
+                        f"(XPEL Stealth) giving the paint a deep matte finish while keeping the original color visible"
+                    )
+                else:
+                    color_description = (
+                        f"the original {paint_color} factory paint covered with high-gloss transparent PPF film "
+                        f"(XPEL Ultimate Plus) giving the paint extra depth and shine"
+                    )
+            elif f_brand == "Inne (wpisz ręcznie)":
+                # Tryb własnej folii - nie wiemy jaki producent, opis bardziej ogólny
+                color_description = f"{czysta_nazwa_koloru} vinyl wrap"
             else:
-                # (v2) Nie nadpisujemy poprzedniej wizualizacji szarym obrazkiem.
-                st.warning("Nie wygenerowano nowej wizualizacji. Poprzednia (jeśli była) pozostaje bez zmian.")
+                color_description = f"{czysta_nazwa_koloru} vinyl wrap by {f_brand}"
+        
+            reference_images = []
+        
+            if uploaded_files:
+                for uf in uploaded_files:
+                    img_bytes = uf.read()
+                    mime = uf.type if uf.type else "image/jpeg"
+                    reference_images.append((img_bytes, mime))
+        
+            if url_zdjecia and url_zdjecia.strip():
+                try:
+                    resp = requests.get(url_zdjecia.strip(), timeout=15, headers={
+                        'User-Agent': 'Mozilla/5.0'
+                    })
+                    if resp.status_code == 200:
+                        mime = resp.headers.get('content-type', 'image/jpeg').split(';')[0].strip()
+                        if 'image' in mime:
+                            reference_images.append((resp.content, mime))
+                        else:
+                            st.warning(f"URL nie wskazuje na obrazek (typ: {mime}).")
+                    else:
+                        st.warning(f"Nie mogę pobrać obrazka z URL (kod: {resp.status_code}).")
+                except Exception as e:
+                    st.warning(f"Nie udało się pobrać zdjęcia z URL: {e}")
+        
+            if reference_images:
+                st.info(f"🎯 Tryb edycji: używam {len(reference_images)} zdjęcia/zdjęć referencyjnych auta.")
+            else:
+                st.info("🎨 Tryb generacji: tworzę auto od zera na podstawie opisu (jakość może być niższa dla bardzo nowych modeli - rozważ dodanie zdjęcia referencyjnego).")
+        
+            with st.spinner("Gemini 2.5 Flash Image renderuje Twoje auto w ciemnym garażu LED..."):
+                img_data = generate_ai_image(
+                    car_description=car_description,
+                    color_description=color_description,
+                    reference_images=reference_images if reference_images else None
+                )
+                if img_data:
+                    st.session_state['ai_img'] = img_data
+                else:
+                    # (v2) Nie nadpisujemy poprzedniej wizualizacji szarym obrazkiem.
+                    st.warning("Nie wygenerowano nowej wizualizacji. Poprzednia (jeśli była) pozostaje bez zmian.")
                 
-    st.markdown("---")
-    st.markdown("### Dodatki do oferty")
-    dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
-    wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name'])
-                       if st.checkbox(d['name'], value=(d['name'] in ED.get('dodatki', [])), key=f"dod_{d['id']}")]
+        st.markdown("---")
+        st.markdown("### Dodatki do oferty")
+        dodatki_dostepne = [f for f in pliki_na_dysku if f['name'].startswith(('4','5'))]
+        wybrane_dodatki = [d for d in sorted(dodatki_dostepne, key=lambda x: x['name'])
+                           if st.checkbox(d['name'], value=(d['name'] in ED.get('dodatki', [])), key=f"dod_{d['id']}")]
+
+    # domyślne wartości dla trybu nieaktywnego (bezpieczeństwo zmiennych)
+    if TRYB_B2B:
+        wybrane_dodatki = []
+    else:
+        folie_dane, folie_b2b, wybrane_dodatki_b2b = {}, [], []
+        typ_pojazdu = pojazd_opis = zakres_b2b = ""
+        bus_dlugi = bus_wysoki = dach_b2b = False
+        wariant_okladki = ""
+
 
 
 # ZAKŁADKI W GŁÓWNYM PANELU
@@ -2112,400 +2680,672 @@ with tab_kreator:
             if st.button("❌ Zakończ edycję"):
                 st.session_state.pop('edycja', None)
                 st.session_state.pop('ai_img', None)
+                st.session_state.pop('_ed_b2b_done', None)
+                st.session_state.pop('b2b_sugestia_m2', None)
                 st.session_state['wstep_editor'] = ''
                 st.rerun()
 
-    col1, col2 = st.columns(2)
+    if TRYB_B2B:
+        # ==========================================================
+        # (v3.0) KREATOR B2B - REKLAMA / FLOTA
+        # ==========================================================
+        col1, col2 = st.columns(2)
+        with col1:
+            firma = st.text_input("Firma (klient B2B)", value=ED.get('firma', ''),
+                                  placeholder="np. Clip&Guard Sp. z o.o.")
+            osoba_kontaktowa = st.text_input("Osoba kontaktowa (opcjonalnie)",
+                                             value=ED.get('osoba', ''))
 
-    with col1:
-        klient = st.text_input("Imię i Nazwisko Klienta", value=ED.get('klient', ''))
+            # Pipedrive: firma (organizacja) + osoba - bez duplikatów
+            _pd_org = None
+            _pd_osoba = None
+            if firma.strip() and _pd_dostepny:
+                _orgs = pipedrive_szukaj_organizacji(_pd_token, firma.strip())
+                if _orgs:
+                    _pd_org = _orgs[0]
+                    st.success(f"🟢 Pipedrive: znaleziono firmę **{_pd_org['name']}**"
+                               + (f" ({_pd_org['adres']})" if _pd_org.get('adres') else "")
+                               + " - szansa powiąże się z nią, bez duplikatu."
+                               + (f" Podobnych firm: {len(_orgs)}." if len(_orgs) > 1 else ""))
+                else:
+                    st.caption("⚪ Pipedrive: brak takiej firmy - zostanie utworzona przy dodawaniu szansy.")
+            if osoba_kontaktowa.strip() and _pd_dostepny:
+                _osoby = pipedrive_szukaj_osoby(_pd_token, osoba_kontaktowa.strip())
+                if _osoby:
+                    _pd_osoba = _osoby[0]
+                    _szcz = " · ".join(x for x in [_pd_osoba.get("email"), _pd_osoba.get("telefon")] if x)
+                    st.caption(f"🟢 Kontakt w Pipedrive: {_pd_osoba['name']}" + (f" ({_szcz})" if _szcz else ""))
 
-        # (v2) Weryfikacja klienta w bazie - działa na danych z cache,
-        # więc NIE powoduje żadnych dodatkowych zapytań ani zawieszeń.
-        if klient.strip() and not ED:
-            _rej = pobierz_rejestr()
-            _trafienia = [r for r in _rej
-                          if str(_pole(r, 'Klient')).strip().lower() == klient.strip().lower()]
-            if _trafienia:
-                _ost = _trafienia[-1]
-                st.warning(
-                    f"⚠️ Klient **{klient}** jest już w rejestrze "
-                    f"(ostatnia oferta: {_pole(_ost, 'Nr oferty', 'Numer oferty', 'Nr') or '?'} "
-                    f"z {_pole(_ost, 'Data') or '?'}, "
-                    f"handlowiec: {_handlowiec_wiersza(_ost) or '?'}). "
-                    f"Jeśli chcesz kontynuować tamtą ofertę, wczytaj ją w zakładce Ewidencja."
-                )
+            nr_o = st.text_input("Numer oferty",
+                                 value=ED.get('nr_o', f"IW-R/{datetime.now().strftime('%Y/%m/%d')}/01"))
 
-        # (v2.6) Wyszukiwanie klienta w PIPEDRIVE - żeby nie dublować osób.
-        # Jeśli osoba istnieje, jej dane (email/telefon/firma) zapisują się
-        # w danych oferty, a szansa sprzedaży powiąże się z nią po ID.
-        _pd_osoba = None
-        if klient.strip() and _pd_dostepny:
-            _pd_znalezieni = pipedrive_szukaj_osoby(_pd_token, klient.strip())
-            if _pd_znalezieni:
-                _pd_osoba = _pd_znalezieni[0]
-                _szczegoly = " · ".join(x for x in [_pd_osoba.get("email"),
-                                                    _pd_osoba.get("telefon"),
-                                                    _pd_osoba.get("organizacja")] if x)
-                st.success(
-                    f"🟢 Pipedrive: znaleziono osobę **{_pd_osoba['name']}**"
-                    + (f" ({_szczegoly})" if _szczegoly else "")
-                    + " - szansa sprzedaży zostanie powiązana z nią, bez tworzenia duplikatu."
-                    + (f" Podobnych osób: {len(_pd_znalezieni)}." if len(_pd_znalezieni) > 1 else "")
-                )
+            st.markdown("---")
+            st.write("💰 **Kalkulacja (widoczna tylko dla Ciebie - m² nie trafią do PDF)**")
+            if not folie_dane:
+                st.warning("Wybierz co najmniej jedną folię w panelu bocznym.")
+                cena_za_pojazd = 0.0
             else:
-                st.caption("⚪ Pipedrive: brak takiej osoby - zostanie utworzona przy dodawaniu szansy sprzedaży.")
+                _wiersze_kalk = []
+                cena_za_pojazd = 0.0
+                for _f, _d in folie_dane.items():
+                    _wartosc = _d['m2'] * _d['cena_m2'] + (PLOTOWANIE_CENA_B2B if _d['plot'] else 0.0)
+                    cena_za_pojazd += _wartosc
+                    _wiersze_kalk.append({
+                        "Folia": _f, "m²": f"{_d['m2']:g}",
+                        "Cena/m²": f"{_d['cena_m2']:g} zł",
+                        "Plot.": "✓" if _d['plot'] else "-",
+                        "Wartość": f"{_wartosc:,.0f} zł".replace(",", " "),
+                    })
+                st.dataframe(pd.DataFrame(_wiersze_kalk), hide_index=True, use_container_width=True)
 
-        nr_o = st.text_input("Numer oferty",
-                             value=ED.get('nr_o', f"IW/{datetime.now().strftime('%Y/%m/%d')}/01"))
-        
-        # Filtrowanie kategorii w cenniku na podstawie wybranego producenta folii
-        # (XPEL -> tylko PPF, 3M/Avery/Arlon/Oracal -> tylko Zmiana koloru, Inne -> wszystkie)
-        kategorie_wszystkie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
-        dozwolone_kategorie = KATEGORIE_DLA_PRODUCENTA.get(f_brand)
-        
-        if dozwolone_kategorie is None:
-            # Tryb "Inne" - pokazujemy wszystko
-            kategorie = kategorie_wszystkie
-        else:
-            # Filtrujemy kategorie - bierzemy tylko te które są w mapowaniu I istnieją w cenniku
-            # case-insensitive, żeby działało jeśli ktoś w arkuszu wpisze "ppf" zamiast "PPF"
-            dozwolone_lower = [d.lower().strip() for d in dozwolone_kategorie]
-            kategorie = [k for k in kategorie_wszystkie if k.lower().strip() in dozwolone_lower]
-            
-            # Bezpiecznik: jeśli filtrowanie odrzuciło wszystko (np. w cenniku nie ma kolumny PPF),
-            # pokazujemy wszystkie kategorie z ostrzeżeniem, żeby aplikacja się nie zablokowała
-            if not kategorie:
-                st.warning(
-                    f"⚠️ Dla producenta '{f_brand}' oczekiwane kategorie to {dozwolone_kategorie}, "
-                    f"ale w cenniku ich nie ma. Pokazuję wszystkie kategorie."
-                )
-                kategorie = kategorie_wszystkie
-        
-        kategoria = st.selectbox("Kategoria", kategorie, index=_eidx(kategorie, ED.get('kategoria')))
-        uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
-        pakiet = st.selectbox("Usługa", uslugi_kat, index=_eidx(uslugi_kat, ED.get('pakiet')))
-        
-        try:
-            wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
-            if not wiersz_ceny.empty:
-                cena_str = str(wiersz_ceny['Cena sprzedaży netto PLN'].values[0])
-                cena_str = cena_str.replace(' ', '').replace('\xa0', '')
-                if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
-                cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
+            liczba_pojazdow = st.number_input("Liczba pojazdów (flota)", min_value=1, step=1,
+                                              value=int(ED.get('liczba_pojazdow', 1)))
+            rabat = st.number_input("Rabat łączny (PLN) - np. rabat flotowy",
+                                    value=float(ED.get('rabat', 0.0)), step=100.0)
+            cena_koncowa = cena_za_pojazd * liczba_pojazdow - rabat
+            _fmt = lambda x: f"{x:,.2f} zł".replace(",", "X").replace(".", ",").replace("X", " ")
+            if liczba_pojazdow > 1:
+                st.info(f"**Cena za 1 pojazd: {_fmt(cena_za_pojazd)}**  \n"
+                        f"**Łącznie za {liczba_pojazdow} pojazdów (po rabacie): {_fmt(cena_koncowa)}**")
             else:
-                cena_domyslna = 0.0
-        except:
-            cena_domyslna = 0.0
-        
-        # (v2) Cicha cena 0.0 bywa przeoczana - dajemy delikatne ostrzeżenie
-        if cena_domyslna == 0.0:
-            st.caption("⚠️ Nie znaleziono ceny w cenniku dla tej kombinacji usługi i segmentu - wpisz cenę ręcznie poniżej.")
+                st.info(f"**Cena do zapłaty netto (na ofercie): {_fmt(cena_koncowa)}**")
 
+        with col2:
+            if 'ai_img' in st.session_state:
+                st.image(st.session_state['ai_img'], use_container_width=True)
+            else:
+                st.info("Wybierz wariant okładki w panelu bocznym i przygotuj grafikę, aby zobaczyć podgląd.")
+
+        # --- tekst wstępu B2B (edytowalny przed PDF) ---
         st.markdown("---")
-        st.write("💰 **Kalkulacja cenowa**")
-        
-        cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować",
-                                      value=float(ED.get('cena_manual', cena_domyslna)), step=100.0)
-        rabat = st.number_input("Rabat dla klienta (PLN)",
-                                value=float(ED.get('rabat', 0.0)), step=100.0)
-        cena_koncowa = cena_manual - rabat
-        
-        st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
+        st.markdown("### ✍️ Tekst wstępu (strona 2 oferty)")
+        if 'zaladuj_wstep' in st.session_state:
+            st.session_state['wstep_editor'] = st.session_state.pop('zaladuj_wstep')
+        st.session_state.setdefault('wstep_editor', '')
 
-    with col2:
-        if 'ai_img' in st.session_state:
-            st.image(st.session_state['ai_img'], use_container_width=True)
-        else:
-            st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
+        _zakres_opis_krotki = f"Oklejenie {zakres_b2b} pojazdu" \
+            + (" + dach" if dach_b2b else "") \
+            + (" (bus długi)" if bus_dlugi else "") + (" (bus wysoki)" if bus_wysoki else "")
 
-    # ==========================================================
-    # (v2.1) TEKST WSTĘPU - podgląd i ręczna edycja przed PDF-em
-    # Działa jak wizualizacja: klikasz "Generuj tekst", AI proponuje
-    # treść, a Ty możesz ją dowolnie poprawić w polu poniżej.
-    # Do PDF-a trafia DOKŁADNIE to, co widzisz w tym polu.
-    # Jeśli pole zostawisz puste - tekst wygeneruje się automatycznie
-    # w momencie tworzenia PDF (zachowanie jak dotychczas).
-    # ==========================================================
-    st.markdown("---")
-    st.markdown("### ✍️ Tekst wstępu (strona 2 oferty)")
-    # (v2.4) Wczytanie wstępu z edytowanej oferty - flaga ustawiana przy kliknięciu
-    # "Edytuj" w Ewidencji, konsumowana tutaj PRZED utworzeniem pola tekstowego
-    # (Streamlit nie pozwala zmieniać stanu widgetu po jego utworzeniu w tym samym przebiegu).
-    if 'zaladuj_wstep' in st.session_state:
-        st.session_state['wstep_editor'] = st.session_state.pop('zaladuj_wstep')
-    st.session_state.setdefault('wstep_editor', '')
-
-    col_w1, col_w2 = st.columns([1, 3])
-    with col_w1:
-        if st.button("🪄 GENERUJ TEKST WSTĘPU", disabled=not zalogowany):
-            _autor_imie = "Adam Trepka"
-            _autor_stan = HANDLOWCY.get(_autor_imie, {}).get("stanowisko", "CEO It`s Wrap")
-            _folia_do_wstepu = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
-            with st.spinner("AI pisze wstęp..."):
-                st.session_state['wstep_editor'] = generate_ai_intro_text(
-                    klient, final_brand, final_model, pakiet, _folia_do_wstepu,
-                    _autor_imie, _autor_stan
-                )
-            st.rerun()
-        if st.session_state.get('wstep_editor', '').strip():
-            if st.button("🗑️ Wyczyść (auto przy PDF)"):
-                st.session_state['wstep_editor'] = ''
+        col_w1, col_w2 = st.columns([1, 3])
+        with col_w1:
+            if st.button("🪄 GENERUJ TEKST WSTĘPU", disabled=not zalogowany, key="b2b_wstep_gen"):
+                _autor_imie = "Adam Trepka"
+                _autor_stan = HANDLOWCY.get(_autor_imie, {}).get("stanowisko", "CEO It`s Wrap")
+                with st.spinner("AI pisze wstęp B2B..."):
+                    st.session_state['wstep_editor'] = generate_ai_intro_text_b2b(
+                        firma, pojazd_opis or typ_pojazdu, _zakres_opis_krotki,
+                        list(folie_dane.keys()), _autor_imie, _autor_stan)
                 st.rerun()
-    with col_w2:
-        wstep_recznie = st.text_area(
-            "Treść wstępu - możesz edytować przed wygenerowaniem PDF",
-            key='wstep_editor',
-            height=220,
-            placeholder=("Pole puste = wstęp wygeneruje się automatycznie podczas tworzenia PDF.\n"
-                         "Kliknij 'GENERUJ TEKST WSTĘPU', aby zobaczyć i poprawić treść przed ofertą.")
-        )
+            if st.session_state.get('wstep_editor', '').strip():
+                if st.button("🗑️ Wyczyść (auto przy PDF)", key="b2b_wstep_clr"):
+                    st.session_state['wstep_editor'] = ''
+                    st.rerun()
+        with col_w2:
+            st.text_area("Treść wstępu - możesz edytować przed wygenerowaniem PDF",
+                         key='wstep_editor', height=220,
+                         placeholder="Pole puste = wstęp wygeneruje się automatycznie podczas tworzenia PDF.")
 
-    if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany):
-        if 'ai_img' not in st.session_state:
-            st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
-        else:
-            with st.spinner("Składam profesjonalny PDF i wgrywam na Dysk Google..."):
-                writer = PdfWriter()
-                # W ofercie pokazujemy pełną nazwę koloru z kodem - klient widzi co konkretnie kupuje
-                final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
-                
-                dane_handlowca = HANDLOWCY[wybrany_handlowiec]
-                
-                # WAŻNE: Wstęp na drugiej stronie oferty (wypowiedź właściciela)
-                # jest ZAWSZE od Adama Trepki jako CEO It`s Wrap, niezależnie kto
-                # operacyjnie przygotowuje ofertę. To strategiczna decyzja - klient
-                # dostaje "powitanie od szefa", a wybrany handlowiec dalej widnieje
-                # jako kontaktowa osoba do bieżącej obsługi (telefon/email niżej w ofercie).
-                AUTOR_WSTEPU_IMIE = "Adam Trepka"
-                if AUTOR_WSTEPU_IMIE in HANDLOWCY:
-                    AUTOR_WSTEPU_STANOWISKO = HANDLOWCY[AUTOR_WSTEPU_IMIE]["stanowisko"]
-                else:
-                    # Fallback gdyby Adam Trepka został usunięty/przemianowany w słowniku
-                    AUTOR_WSTEPU_STANOWISKO = "CEO It`s Wrap"
-                
-                # (v2.1) Priorytet ma tekst z pola edycji (jeśli handlowiec go
-                # wygenerował/poprawił). Puste pole = automat, jak dotychczas.
-                _wstep_z_edytora = st.session_state.get('wstep_editor', '').strip()
-                if _wstep_z_edytora:
-                    wygenerowany_wstep = _wstep_z_edytora
-                else:
-                    wygenerowany_wstep = generate_ai_intro_text(
-                        klient, final_brand, final_model, pakiet, final_foil_text,
-                        AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO
+        # ==========================================================
+        # (v3.0) GENEROWANIE OFERTY B2B
+        # ==========================================================
+        if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany, key="b2b_generuj"):
+            if 'ai_img' not in st.session_state:
+                st.error("Okładka jest wymagana - przygotuj ją w panelu bocznym (sekcja 'Okładka oferty').")
+            elif not folie_dane:
+                st.error("Wybierz co najmniej jedną folię w panelu bocznym.")
+            else:
+                with st.spinner("Składam ofertę B2B i wgrywam na Dysk Google..."):
+                    writer = PdfWriter()
+                    dane_handlowca = HANDLOWCY[wybrany_handlowiec]
+                    _folie_lista = list(folie_dane.keys())
+                    _folie_txt = ", ".join(_folie_lista)
+                    _plot_txt = ", plotowanie/wycinanie" if any(d['plot'] for d in folie_dane.values()) else ""
+                    zakres_opis = _zakres_opis_krotki + f". Materiały: {_folie_txt}{_plot_txt}."
+
+                    AUTOR_WSTEPU_IMIE = "Adam Trepka"
+                    AUTOR_WSTEPU_STANOWISKO = HANDLOWCY.get(AUTOR_WSTEPU_IMIE, {}).get("stanowisko", "CEO It`s Wrap")
+                    _wstep_z_edytora = st.session_state.get('wstep_editor', '').strip()
+                    if _wstep_z_edytora:
+                        wygenerowany_wstep = _wstep_z_edytora
+                    else:
+                        wygenerowany_wstep = generate_ai_intro_text_b2b(
+                            firma, pojazd_opis or typ_pojazdu, _zakres_opis_krotki,
+                            _folie_lista, AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO)
+
+                    _fmt2 = lambda x: f"{x:,.2f} zł".replace(",", "X").replace(".", ",").replace("X", " ")
+                    replacements = {
+                        "{{KLIENT}}": firma,
+                        "{{OSOBA_KONTAKTOWA}}": osoba_kontaktowa,
+                        "{{POJAZD}}": pojazd_opis or typ_pojazdu,
+                        "{{MODEL_AUTA}}": pojazd_opis or typ_pojazdu,
+                        "{{ZAKRES_OPIS}}": zakres_opis,
+                        "{{TYP_FOLII}}": _folie_txt,
+                        "{{RODZAJ_FOLII}}": _folie_txt,
+                        "{{NR_OFERTY}}": nr_o,
+                        "{{LICZBA_POJAZDOW}}": str(liczba_pojazdow),
+                        "{{CENA_ZA_POJAZD}}": _fmt2(cena_za_pojazd),
+                        "{{CENA_KONCOWA}}": _fmt2(cena_koncowa),
+                        "{{WSTEP_AI}}": wygenerowany_wstep,
+                        "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
+                        "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
+                        "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"],
+                    }
+
+                    def _plik_b2b(*slowa):
+                        for f in pliki_na_dysku:
+                            n = f['name'].lower()
+                            if n.startswith('b2b') and all(s.lower() in n for s in slowa):
+                                return f
+                        return None
+
+                    okladka = _plik_b2b('b2b_1_') or _plik_b2b('b2b_1 ')
+                    wstep_slide = _plik_b2b('b2b_1b')
+                    karty = []
+                    for _f in _folie_lista:
+                        _kw = FOLIE_B2B_SZABLONY.get(_f, '')
+                        _k = _plik_b2b('b2b_2', _kw) if _kw else None
+                        if _k and _k not in karty:
+                            karty.append(_k)
+                    if any("biał" in f.lower() for f in _folie_lista):
+                        _k = _plik_b2b('b2b_2', 'latex') or _plik_b2b('b2b_2', 'white')
+                        if _k and _k not in karty:
+                            karty.append(_k)
+                    if any("bezbarwn" in f.lower() for f in _folie_lista):
+                        _k = _plik_b2b('b2b_2', 'korzysci') or _plik_b2b('b2b_2', 'rezydualna')
+                        if _k and _k not in karty:
+                            karty.append(_k)
+                    zakres_slide = _plik_b2b('b2b_3')
+                    koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec,
+                                                    list(HANDLOWCY.keys()), prefix='B2B_6')
+
+                    seq = [okladka, wstep_slide] + karty + [zakres_slide] + wybrane_dodatki_b2b + [koniec]
+                    seq = [f for f in seq if f]
+                    if not seq:
+                        st.error("Nie znalazłem na Dysku żadnych szablonów B2B (pliki B2B_1_*, B2B_2_*, B2B_3_*...). "
+                                 "Wgraj szablony do folderu aplikacji - listę plików i tagów masz w dokumentacji.")
+                        st.stop()
+                    _braki = [n for n, f in [("B2B_1_ (okładka)", okladka), ("B2B_1b (wstęp)", wstep_slide),
+                                             ("B2B_3 (zakres/cena)", zakres_slide)] if f is None]
+                    if _braki:
+                        st.warning("Brakuje szablonów: " + ", ".join(_braki) + " - oferta powstanie bez tych stron.")
+
+                    for f_info in seq:
+                        prs = Presentation(download_file(service, f_info['id']))
+                        for slide in prs.slides:
+                            if f_info['name'].lower().startswith(('b2b_1_', 'b2b_1 ')):
+                                for shape in list(slide.shapes):
+                                    if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
+                                        pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']),
+                                                                       shape.left, shape.top, shape.width, shape.height)
+                                        slide.shapes._spTree.remove(pic._element)
+                                        slide.shapes._spTree.insert(2, pic._element)
+                                        shape._element.getparent().remove(shape._element)
+                            for shape in slide.shapes:
+                                replace_text_in_shape(shape, replacements)
+                        tmp_p = f"tmp_{uuid.uuid4().hex[:8]}_{f_info['id']}.pptx"
+                        prs.save(tmp_p)
+                        pdf = pptx_to_pdf(tmp_p)
+                        if pdf:
+                            writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
+
+                    final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+                    pdf_bytes = final_io.getvalue()
+                    nazwa_pliku_wyjsciowego = f"Oferta_B2B_{(firma or 'klient').replace(' ', '_')[:30]}_{datetime.now().strftime('%H%M%S')}.pdf"
+
+                    oauth_drive = get_oauth_drive_service()
+                    wiz_id = ""
+                    if oauth_drive:
+                        folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
+                        utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, pdf_bytes)
+                        try:
+                            _wiz_meta = {'name': f"Wizualizacja_B2B_{nr_o.replace('/', '_')}_{datetime.now().strftime('%H%M%S')}.png",
+                                         'parents': [folder_oferty_id]}
+                            _wiz_media = MediaIoBaseUpload(io.BytesIO(st.session_state['ai_img']),
+                                                           mimetype='image/png', resumable=True)
+                            wiz_id = oauth_drive.files().create(body=_wiz_meta, media_body=_wiz_media,
+                                                                fields='id').execute().get('id', "")
+                        except Exception:
+                            wiz_id = ""
+                    else:
+                        utworzony_link = None
+                        st.warning("OAuth Drive niedostępny - PDF nie został zapisany w chmurze. Pobierz plik lokalnie poniżej.")
+                    link_do_zapisu = utworzony_link if utworzony_link else "Błąd uploadu"
+
+                    dane_oferty_json = json.dumps({
+                        "tryb": "B2B",
+                        "handlowiec": wybrany_handlowiec,
+                        "firma": firma, "osoba": osoba_kontaktowa,
+                        "klient": firma, "nr_o": nr_o,
+                        "typ_pojazdu": typ_pojazdu, "pojazd_opis": pojazd_opis,
+                        "zakres_b2b": zakres_b2b,
+                        "bus_dlugi": bus_dlugi, "bus_wysoki": bus_wysoki, "dach_b2b": dach_b2b,
+                        "folie": {f: {"m2": d["m2"], "plot": d["plot"]} for f, d in folie_dane.items()},
+                        "liczba_pojazdow": liczba_pojazdow, "rabat": rabat,
+                        "wariant_okladki": wariant_okladki,
+                        "dodatki": [d['name'] for d in wybrane_dodatki_b2b],
+                        "wstep": wygenerowany_wstep,
+                        "wizualizacja_id": wiz_id,
+                        "pd_org_id": (_pd_org or {}).get("id", ""),
+                        "pd_person_id": (_pd_osoba or {}).get("id", ""),
+                        "klient_email": (_pd_osoba or {}).get("email", ""),
+                        "klient_telefon": (_pd_osoba or {}).get("telefon", ""),
+                    }, ensure_ascii=False)
+
+                    _usluga_rej = f"B2B: {zakres_b2b}" + (" + dach" if dach_b2b else "") \
+                        + (f" × {liczba_pojazdow} szt." if liczba_pojazdow > 1 else "")
+                    if zapisz_do_rejestru(nr_o, wybrany_handlowiec, firma,
+                                          pojazd_opis or typ_pojazdu, _usluga_rej, _folie_txt,
+                                          cena_koncowa, link_do_zapisu, dane_oferty_json):
+                        st.success("✅ Oferta B2B zapisana w systemie! Plik został zachowany w folderze 'Oferty'.")
+
+                    st.session_state['ostatnia_oferta'] = {
+                        "pdf_bytes": pdf_bytes,
+                        "nazwa_pliku": nazwa_pliku_wyjsciowego,
+                        "nr_o": nr_o,
+                        "klient": firma,
+                        "auto": pojazd_opis or typ_pojazdu,
+                        "pakiet": _usluga_rej,
+                        "cena": cena_koncowa,
+                        "pipedrive_deal": None,
+                        "pd_person_id": (_pd_osoba or {}).get("id", ""),
+                        "pd_org_id": (_pd_org or {}).get("id", ""),
+                        "tryb": "B2B",
+                    }
+                    st.balloons()
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            klient = st.text_input("Imię i Nazwisko Klienta", value=ED.get('klient', ''))
+
+            # (v2) Weryfikacja klienta w bazie - działa na danych z cache,
+            # więc NIE powoduje żadnych dodatkowych zapytań ani zawieszeń.
+            if klient.strip() and not ED:
+                _rej = pobierz_rejestr()
+                _trafienia = [r for r in _rej
+                              if str(_pole(r, 'Klient')).strip().lower() == klient.strip().lower()]
+                if _trafienia:
+                    _ost = _trafienia[-1]
+                    st.warning(
+                        f"⚠️ Klient **{klient}** jest już w rejestrze "
+                        f"(ostatnia oferta: {_pole(_ost, 'Nr oferty', 'Numer oferty', 'Nr') or '?'} "
+                        f"z {_pole(_ost, 'Data') or '?'}, "
+                        f"handlowiec: {_handlowiec_wiersza(_ost) or '?'}). "
+                        f"Jeśli chcesz kontynuować tamtą ofertę, wczytaj ją w zakładce Ewidencja."
                     )
 
-                cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
-                cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
-
-                replacements = {
-                    "{{KLIENT}}": klient, 
-                    "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
-                    "{{RODZAJ_FOLII}}": final_foil_text, 
-                    "{{USLUGA_NAZWA}}": pakiet,
-                    "{{NR_OFERTY}}": nr_o,
-                    "{{CENA_KATALOG}}": cena_katalogowa_str,
-                    "{{CENA_KONCOWA}}": cena_koncowa_str,
-                    "{{WSTEP_AI}}": wygenerowany_wstep,
-                    "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
-                    "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
-                    "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"]
-                }
-
-                okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
-                wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
-                
-                # ==========================================================
-                # DOPASOWANIE SZABLONU PRODUKTOWEGO (slajd z opisem folii)
-                # ==========================================================
-                # Nazwy plików w nowym formacie zaczynają się od daty:
-                # - 20251209_PPF_kolor_XPEL      -> XPEL Color (PPF kolorowy)
-                # - 20251209_PPF_XPELStealth     -> XPEL Stealth (mat/satyna PPF)
-                # - 20251209_PPF_XPELUltimate    -> XPEL Ultimate Plus (połysk PPF)
-                # - 20251209_PPF_XPELXtreme      -> XPEL Xtreme (premium PPF)
-                # - 20260313_Zmiana koloru_3M    -> 3M wrap
-                # - 20260313_Zmiana koloru_AVERY -> Avery wrap
-                # - 20260313_Zmiana koloru_ORACLE-> Oracal wrap (w nazwie pliku "Oracle")
-                # - 20260430_Zmiana koloru_PWF   -> PWF wrap
-                #
-                # Wzorzec wyszukiwania: case-insensitive po słowie kluczowym
-                # w nazwie pliku, bez polegania na startswith('2_').
-                
-                def znajdz_szablon(slowo_klucz, dodatkowe_filtry=None):
-                    """Szuka pliku zawierającego dane słowo (case-insensitive).
-                    dodatkowe_filtry: lista dodatkowych słów, które TEŻ muszą być w nazwie."""
-                    for f in pliki_na_dysku:
-                        nazwa_lower = f['name'].lower()
-                        if slowo_klucz.lower() in nazwa_lower:
-                            if dodatkowe_filtry:
-                                if all(filt.lower() in nazwa_lower for filt in dodatkowe_filtry):
-                                    return f
-                            else:
-                                return f
-                    return None
-                
-                produkt = None
-                
-                # Priorytet 1: oferta reklamowa (pakiet o nazwie "reklama")
-                if "reklam" in pakiet.lower():
-                    produkt = znajdz_szablon('reklama')
-                # Priorytet 2: producent folii - mapowanie na słowo w nazwie pliku
-                elif f_brand == "3M 2080 Series":
-                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['3m'])
-                elif f_brand == "Avery Dennison SW900":
-                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['avery'])
-                elif f_brand == "Oracal 970RA":
-                    # W nazwie pliku jest "ORACLE" (typo z pliku), więc szukamy obu wariantów
-                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['oracle']) or \
-                              znajdz_szablon('zmiana koloru', dodatkowe_filtry=['oracal'])
-                elif f_brand == "Arlon":
-                    produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['arlon'])
-                elif f_brand == "PWF (Platinum Wrapping Film)":
-                    # PWF Performance to PPF, reszta linii to wrap kolorowy
-                    if "Performance" in f_cat:
-                        # Linia Performance łączy PPF z kolorem - jeśli mamy dedykowany szablon, użyj
-                        produkt = znajdz_szablon('ppf', dodatkowe_filtry=['pwf']) or \
-                                  znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
-                    else:
-                        produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
-                # Priorytet 3: XPEL - rozróżnienie po linii produktowej
-                elif f_brand == "XPEL (Folie Ochronne PPF)":
-                    if "Ultimate" in f_color:
-                        produkt = znajdz_szablon('xpelultimate') or znajdz_szablon('ultimate')
-                    elif "Stealth" in f_color:
-                        produkt = znajdz_szablon('xpelstealth') or znajdz_szablon('stealth')
-                    elif "Xtreme" in f_color:
-                        produkt = znajdz_szablon('xpelxtreme') or znajdz_szablon('xtreme')
-                    elif "Color" in f_cat:
-                        # XPEL Color - kolorowy PPF
-                        produkt = znajdz_szablon('ppf_kolor') or znajdz_szablon('xpel', dodatkowe_filtry=['kolor'])
-                    else:
-                        # Ogólny XPEL jeśli nie wpadł w żadną kategorię
-                        produkt = znajdz_szablon('xpel')
-                
-                # Fallback: znajdź dowolny szablon zaczynający się od 2_ (stara konwencja)
-                # lub zawierający "PPF" / "Zmiana koloru" w nazwie (nowa konwencja)
-                if not produkt:
-                    produkt = next((f for f in pliki_na_dysku 
-                                    if f['name'].startswith('2_') 
-                                    or 'ppf' in f['name'].lower() 
-                                    or 'zmiana koloru' in f['name'].lower()), None)
-                
-                if rabat > 0: 
-                    zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
-                else: 
-                    zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
-                
-                if not zakres: 
-                    zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
-
-                # NOWE: ostatnia strona spersonalizowana pod handlowca
-                # Plik z prefixem "6_" i imieniem handlowca w nazwie (np. "6_Oferta_ostatnia_Adam Trepka")
-                # Fallback: pierwszy ogólny plik "6_" gdy spersonalizowanej wersji nie ma
-                koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec, list(HANDLOWCY.keys()))
-
-                seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
-                seq = [f for f in seq if f]
-
-                for f_info in seq:
-                    prs = Presentation(download_file(service, f_info['id']))
-                    for slide in prs.slides:
-                        if f_info['name'].startswith('1_'):
-                            for shape in list(slide.shapes):
-                                if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
-                                    pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
-                                    slide.shapes._spTree.remove(pic._element)
-                                    slide.shapes._spTree.insert(2, pic._element)
-                                    shape._element.getparent().remove(shape._element)
-
-                        for shape in slide.shapes:
-                            replace_text_in_shape(shape, replacements)
-
-                    # (v2) Unikalne nazwy plików tymczasowych - bezpieczne, gdy
-                    # dwóch handlowców generuje oferty w tym samym momencie.
-                    tmp_p = f"tmp_{uuid.uuid4().hex[:8]}_{f_info['id']}.pptx"
-                    prs.save(tmp_p)
-                    pdf = pptx_to_pdf(tmp_p)
-                    if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
-
-                final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
-                pdf_bytes = final_io.getvalue()
-                nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
-                
-                oauth_drive = get_oauth_drive_service()
-                wiz_id = ""
-                if oauth_drive:
-                    folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
-                    utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, pdf_bytes)
-                    # (v2.4) Zapisujemy też PNG wizualizacji - dzięki temu przy
-                    # późniejszej edycji oferty NIE trzeba generować obrazu od nowa.
-                    try:
-                        _wiz_meta = {
-                            'name': f"Wizualizacja_{nr_o.replace('/', '_')}_{datetime.now().strftime('%H%M%S')}.png",
-                            'parents': [folder_oferty_id]
-                        }
-                        _wiz_media = MediaIoBaseUpload(io.BytesIO(st.session_state['ai_img']),
-                                                       mimetype='image/png', resumable=True)
-                        wiz_id = oauth_drive.files().create(
-                            body=_wiz_meta, media_body=_wiz_media, fields='id'
-                        ).execute().get('id', "")
-                    except Exception:
-                        wiz_id = ""
+            # (v2.6) Wyszukiwanie klienta w PIPEDRIVE - żeby nie dublować osób.
+            # Jeśli osoba istnieje, jej dane (email/telefon/firma) zapisują się
+            # w danych oferty, a szansa sprzedaży powiąże się z nią po ID.
+            _pd_osoba = None
+            if klient.strip() and _pd_dostepny:
+                _pd_znalezieni = pipedrive_szukaj_osoby(_pd_token, klient.strip())
+                if _pd_znalezieni:
+                    _pd_osoba = _pd_znalezieni[0]
+                    _szczegoly = " · ".join(x for x in [_pd_osoba.get("email"),
+                                                        _pd_osoba.get("telefon"),
+                                                        _pd_osoba.get("organizacja")] if x)
+                    st.success(
+                        f"🟢 Pipedrive: znaleziono osobę **{_pd_osoba['name']}**"
+                        + (f" ({_szczegoly})" if _szczegoly else "")
+                        + " - szansa sprzedaży zostanie powiązana z nią, bez tworzenia duplikatu."
+                        + (f" Podobnych osób: {len(_pd_znalezieni)}." if len(_pd_znalezieni) > 1 else "")
+                    )
                 else:
-                    utworzony_link = None
-                    st.warning("OAuth Drive niedostępny - PDF nie został zapisany w chmurze. Pobierz plik lokalnie poniżej.")
+                    st.caption("⚪ Pipedrive: brak takiej osoby - zostanie utworzona przy dodawaniu szansy sprzedaży.")
+
+            nr_o = st.text_input("Numer oferty",
+                                 value=ED.get('nr_o', f"IW/{datetime.now().strftime('%Y/%m/%d')}/01"))
+        
+            # Filtrowanie kategorii w cenniku na podstawie wybranego producenta folii
+            # (XPEL -> tylko PPF, 3M/Avery/Arlon/Oracal -> tylko Zmiana koloru, Inne -> wszystkie)
+            kategorie_wszystkie = [k for k in df_cennik['Kategoria'].unique() if str(k).strip() != ""]
+            dozwolone_kategorie = KATEGORIE_DLA_PRODUCENTA.get(f_brand)
+        
+            if dozwolone_kategorie is None:
+                # Tryb "Inne" - pokazujemy wszystko
+                kategorie = kategorie_wszystkie
+            else:
+                # Filtrujemy kategorie - bierzemy tylko te które są w mapowaniu I istnieją w cenniku
+                # case-insensitive, żeby działało jeśli ktoś w arkuszu wpisze "ppf" zamiast "PPF"
+                dozwolone_lower = [d.lower().strip() for d in dozwolone_kategorie]
+                kategorie = [k for k in kategorie_wszystkie if k.lower().strip() in dozwolone_lower]
+            
+                # Bezpiecznik: jeśli filtrowanie odrzuciło wszystko (np. w cenniku nie ma kolumny PPF),
+                # pokazujemy wszystkie kategorie z ostrzeżeniem, żeby aplikacja się nie zablokowała
+                if not kategorie:
+                    st.warning(
+                        f"⚠️ Dla producenta '{f_brand}' oczekiwane kategorie to {dozwolone_kategorie}, "
+                        f"ale w cenniku ich nie ma. Pokazuję wszystkie kategorie."
+                    )
+                    kategorie = kategorie_wszystkie
+        
+            kategoria = st.selectbox("Kategoria", kategorie, index=_eidx(kategorie, ED.get('kategoria')))
+            uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
+            pakiet = st.selectbox("Usługa", uslugi_kat, index=_eidx(uslugi_kat, ED.get('pakiet')))
+        
+            try:
+                wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
+                if not wiersz_ceny.empty:
+                    cena_str = str(wiersz_ceny['Cena sprzedaży netto PLN'].values[0])
+                    cena_str = cena_str.replace(' ', '').replace('\xa0', '')
+                    if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
+                    cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
+                else:
+                    cena_domyslna = 0.0
+            except:
+                cena_domyslna = 0.0
+        
+            # (v2) Cicha cena 0.0 bywa przeoczana - dajemy delikatne ostrzeżenie
+            if cena_domyslna == 0.0:
+                st.caption("⚠️ Nie znaleziono ceny w cenniku dla tej kombinacji usługi i segmentu - wpisz cenę ręcznie poniżej.")
+
+            st.markdown("---")
+            st.write("💰 **Kalkulacja cenowa**")
+        
+            cena_manual = st.number_input("Cena bazowa NETTO (PLN) - możesz edytować",
+                                          value=float(ED.get('cena_manual', cena_domyslna)), step=100.0)
+            rabat = st.number_input("Rabat dla klienta (PLN)",
+                                    value=float(ED.get('rabat', 0.0)), step=100.0)
+            cena_koncowa = cena_manual - rabat
+        
+            st.info(f"**Cena do zapłaty netto (na ofercie): {cena_koncowa:,.2f} zł**".replace(',', 'X').replace('.', ',').replace('X', ' '))
+
+        with col2:
+            if 'ai_img' in st.session_state:
+                st.image(st.session_state['ai_img'], use_container_width=True)
+            else:
+                st.info("Skonfiguruj auto w panelu bocznym i wygeneruj zdjęcie, aby zobaczyć podgląd.")
+
+        # ==========================================================
+        # (v2.1) TEKST WSTĘPU - podgląd i ręczna edycja przed PDF-em
+        # Działa jak wizualizacja: klikasz "Generuj tekst", AI proponuje
+        # treść, a Ty możesz ją dowolnie poprawić w polu poniżej.
+        # Do PDF-a trafia DOKŁADNIE to, co widzisz w tym polu.
+        # Jeśli pole zostawisz puste - tekst wygeneruje się automatycznie
+        # w momencie tworzenia PDF (zachowanie jak dotychczas).
+        # ==========================================================
+        st.markdown("---")
+        st.markdown("### ✍️ Tekst wstępu (strona 2 oferty)")
+        # (v2.4) Wczytanie wstępu z edytowanej oferty - flaga ustawiana przy kliknięciu
+        # "Edytuj" w Ewidencji, konsumowana tutaj PRZED utworzeniem pola tekstowego
+        # (Streamlit nie pozwala zmieniać stanu widgetu po jego utworzeniu w tym samym przebiegu).
+        if 'zaladuj_wstep' in st.session_state:
+            st.session_state['wstep_editor'] = st.session_state.pop('zaladuj_wstep')
+        st.session_state.setdefault('wstep_editor', '')
+
+        col_w1, col_w2 = st.columns([1, 3])
+        with col_w1:
+            if st.button("🪄 GENERUJ TEKST WSTĘPU", disabled=not zalogowany):
+                _autor_imie = "Adam Trepka"
+                _autor_stan = HANDLOWCY.get(_autor_imie, {}).get("stanowisko", "CEO It`s Wrap")
+                _folia_do_wstepu = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
+                with st.spinner("AI pisze wstęp..."):
+                    st.session_state['wstep_editor'] = generate_ai_intro_text(
+                        klient, final_brand, final_model, pakiet, _folia_do_wstepu,
+                        _autor_imie, _autor_stan
+                    )
+                st.rerun()
+            if st.session_state.get('wstep_editor', '').strip():
+                if st.button("🗑️ Wyczyść (auto przy PDF)"):
+                    st.session_state['wstep_editor'] = ''
+                    st.rerun()
+        with col_w2:
+            wstep_recznie = st.text_area(
+                "Treść wstępu - możesz edytować przed wygenerowaniem PDF",
+                key='wstep_editor',
+                height=220,
+                placeholder=("Pole puste = wstęp wygeneruje się automatycznie podczas tworzenia PDF.\n"
+                             "Kliknij 'GENERUJ TEKST WSTĘPU', aby zobaczyć i poprawić treść przed ofertą.")
+            )
+
+        if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany):
+            if 'ai_img' not in st.session_state:
+                st.error("Wizualizacja auta jest wymagana. Użyj przycisku w panelu bocznym!")
+            else:
+                with st.spinner("Składam profesjonalny PDF i wgrywam na Dysk Google..."):
+                    writer = PdfWriter()
+                    # W ofercie pokazujemy pełną nazwę koloru z kodem - klient widzi co konkretnie kupuje
+                    final_foil_text = f"{f_color} (na lakier: {paint_color})" if "Bezbarwne" in f_cat else f_color
                 
-                link_do_zapisu = utworzony_link if utworzony_link else "Błąd uploadu"
+                    dane_handlowca = HANDLOWCY[wybrany_handlowiec]
+                
+                    # WAŻNE: Wstęp na drugiej stronie oferty (wypowiedź właściciela)
+                    # jest ZAWSZE od Adama Trepki jako CEO It`s Wrap, niezależnie kto
+                    # operacyjnie przygotowuje ofertę. To strategiczna decyzja - klient
+                    # dostaje "powitanie od szefa", a wybrany handlowiec dalej widnieje
+                    # jako kontaktowa osoba do bieżącej obsługi (telefon/email niżej w ofercie).
+                    AUTOR_WSTEPU_IMIE = "Adam Trepka"
+                    if AUTOR_WSTEPU_IMIE in HANDLOWCY:
+                        AUTOR_WSTEPU_STANOWISKO = HANDLOWCY[AUTOR_WSTEPU_IMIE]["stanowisko"]
+                    else:
+                        # Fallback gdyby Adam Trepka został usunięty/przemianowany w słowniku
+                        AUTOR_WSTEPU_STANOWISKO = "CEO It`s Wrap"
+                
+                    # (v2.1) Priorytet ma tekst z pola edycji (jeśli handlowiec go
+                    # wygenerował/poprawił). Puste pole = automat, jak dotychczas.
+                    _wstep_z_edytora = st.session_state.get('wstep_editor', '').strip()
+                    if _wstep_z_edytora:
+                        wygenerowany_wstep = _wstep_z_edytora
+                    else:
+                        wygenerowany_wstep = generate_ai_intro_text(
+                            klient, final_brand, final_model, pakiet, final_foil_text,
+                            AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO
+                        )
 
-                # (v2) Pełne parametry oferty do późniejszej edycji (kolumna DaneOferty)
-                dane_oferty_json = json.dumps({
-                    "handlowiec": wybrany_handlowiec,
-                    "klient": klient,
-                    "nr_o": nr_o,
-                    "brand": brand,
-                    "final_brand": final_brand,
-                    "final_model": final_model,
-                    "body": body,
-                    "segment": segment_final,
-                    "year": year,
-                    "gen_code": gen_code,
-                    "f_brand": f_brand,
-                    "f_cat": f_cat,
-                    "f_color": f_color,
-                    "paint_color": paint_color,
-                    "kategoria": kategoria,
-                    "pakiet": pakiet,
-                    "cena_manual": cena_manual,
-                    "rabat": rabat,
-                    "dodatki": [d['name'] for d in wybrane_dodatki],
-                    # (v2.4) Do odtworzenia przy edycji bez ponownej generacji:
-                    "wstep": wygenerowany_wstep,
-                    "wizualizacja_id": wiz_id,
-                    # (v2.6) Dane klienta z Pipedrive (jeśli osoba istniała):
-                    "pd_person_id": (_pd_osoba or {}).get("id", ""),
-                    "klient_email": (_pd_osoba or {}).get("email", ""),
-                    "klient_telefon": (_pd_osoba or {}).get("telefon", ""),
-                    "klient_firma": (_pd_osoba or {}).get("organizacja", ""),
-                }, ensure_ascii=False)
+                    cena_koncowa_str = f"{cena_koncowa:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
+                    cena_katalogowa_str = f"{cena_manual:,.2f} zł".replace(',', 'X').replace('.', ',').replace('X', ' ')
 
-                if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu, dane_oferty_json):
-                    st.success(f"✅ Oferta zapisana w systemie CRM! Plik został zachowany w folderze 'Oferty'.")
+                    replacements = {
+                        "{{KLIENT}}": klient, 
+                        "{{MODEL_AUTA}}": f"{final_brand} {final_model}",
+                        "{{RODZAJ_FOLII}}": final_foil_text, 
+                        "{{USLUGA_NAZWA}}": pakiet,
+                        "{{NR_OFERTY}}": nr_o,
+                        "{{CENA_KATALOG}}": cena_katalogowa_str,
+                        "{{CENA_KONCOWA}}": cena_koncowa_str,
+                        "{{WSTEP_AI}}": wygenerowany_wstep,
+                        "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
+                        "{{HANDLOWIEC_TEL}}": dane_handlowca["telefon"],
+                        "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"]
+                    }
 
-                # (v2.3) Zapamiętujemy wygenerowaną ofertę w sesji - dzięki temu
-                # przycisk pobierania i sekcja Pipedrive nie znikają po
-                # przeładowaniu widoku (Streamlit wykonuje rerun po każdym kliknięciu).
-                st.session_state['ostatnia_oferta'] = {
-                    "pdf_bytes": pdf_bytes,
-                    "nazwa_pliku": nazwa_pliku_wyjsciowego,
-                    "nr_o": nr_o,
-                    "klient": klient,
-                    "auto": f"{final_brand} {final_model}",
-                    "pakiet": pakiet,
-                    "cena": cena_koncowa,
-                    "pipedrive_deal": None,
-                    "pd_person_id": (_pd_osoba or {}).get("id", ""),
-                }
-                st.balloons()
+                    okladka = next((f for f in pliki_na_dysku if f['name'].startswith('1_')), None)
+                    wstep_slide = next((f for f in pliki_na_dysku if f['name'].lower().startswith('1b_')), None)
+                
+                    # ==========================================================
+                    # DOPASOWANIE SZABLONU PRODUKTOWEGO (slajd z opisem folii)
+                    # ==========================================================
+                    # Nazwy plików w nowym formacie zaczynają się od daty:
+                    # - 20251209_PPF_kolor_XPEL      -> XPEL Color (PPF kolorowy)
+                    # - 20251209_PPF_XPELStealth     -> XPEL Stealth (mat/satyna PPF)
+                    # - 20251209_PPF_XPELUltimate    -> XPEL Ultimate Plus (połysk PPF)
+                    # - 20251209_PPF_XPELXtreme      -> XPEL Xtreme (premium PPF)
+                    # - 20260313_Zmiana koloru_3M    -> 3M wrap
+                    # - 20260313_Zmiana koloru_AVERY -> Avery wrap
+                    # - 20260313_Zmiana koloru_ORACLE-> Oracal wrap (w nazwie pliku "Oracle")
+                    # - 20260430_Zmiana koloru_PWF   -> PWF wrap
+                    #
+                    # Wzorzec wyszukiwania: case-insensitive po słowie kluczowym
+                    # w nazwie pliku, bez polegania na startswith('2_').
+                
+                    def znajdz_szablon(slowo_klucz, dodatkowe_filtry=None):
+                        """Szuka pliku zawierającego dane słowo (case-insensitive).
+                        dodatkowe_filtry: lista dodatkowych słów, które TEŻ muszą być w nazwie."""
+                        for f in pliki_na_dysku:
+                            nazwa_lower = f['name'].lower()
+                            if slowo_klucz.lower() in nazwa_lower:
+                                if dodatkowe_filtry:
+                                    if all(filt.lower() in nazwa_lower for filt in dodatkowe_filtry):
+                                        return f
+                                else:
+                                    return f
+                        return None
+                
+                    produkt = None
+                
+                    # Priorytet 1: oferta reklamowa (pakiet o nazwie "reklama")
+                    if "reklam" in pakiet.lower():
+                        produkt = znajdz_szablon('reklama')
+                    # Priorytet 2: producent folii - mapowanie na słowo w nazwie pliku
+                    elif f_brand == "3M 2080 Series":
+                        produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['3m'])
+                    elif f_brand == "Avery Dennison SW900":
+                        produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['avery'])
+                    elif f_brand == "Oracal 970RA":
+                        # W nazwie pliku jest "ORACLE" (typo z pliku), więc szukamy obu wariantów
+                        produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['oracle']) or \
+                                  znajdz_szablon('zmiana koloru', dodatkowe_filtry=['oracal'])
+                    elif f_brand == "Arlon":
+                        produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['arlon'])
+                    elif f_brand == "PWF (Platinum Wrapping Film)":
+                        # PWF Performance to PPF, reszta linii to wrap kolorowy
+                        if "Performance" in f_cat:
+                            # Linia Performance łączy PPF z kolorem - jeśli mamy dedykowany szablon, użyj
+                            produkt = znajdz_szablon('ppf', dodatkowe_filtry=['pwf']) or \
+                                      znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
+                        else:
+                            produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
+                    # Priorytet 3: XPEL - rozróżnienie po linii produktowej
+                    elif f_brand == "XPEL (Folie Ochronne PPF)":
+                        if "Ultimate" in f_color:
+                            produkt = znajdz_szablon('xpelultimate') or znajdz_szablon('ultimate')
+                        elif "Stealth" in f_color:
+                            produkt = znajdz_szablon('xpelstealth') or znajdz_szablon('stealth')
+                        elif "Xtreme" in f_color:
+                            produkt = znajdz_szablon('xpelxtreme') or znajdz_szablon('xtreme')
+                        elif "Color" in f_cat:
+                            # XPEL Color - kolorowy PPF
+                            produkt = znajdz_szablon('ppf_kolor') or znajdz_szablon('xpel', dodatkowe_filtry=['kolor'])
+                        else:
+                            # Ogólny XPEL jeśli nie wpadł w żadną kategorię
+                            produkt = znajdz_szablon('xpel')
+                
+                    # Fallback: znajdź dowolny szablon zaczynający się od 2_ (stara konwencja)
+                    # lub zawierający "PPF" / "Zmiana koloru" w nazwie (nowa konwencja)
+                    if not produkt:
+                        produkt = next((f for f in pliki_na_dysku 
+                                        if f['name'].startswith('2_') 
+                                        or 'ppf' in f['name'].lower() 
+                                        or 'zmiana koloru' in f['name'].lower()), None)
+                
+                    if rabat > 0: 
+                        zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' not in f['name'].lower()), None)
+                    else: 
+                        zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3') and 'bezrabatu' in f['name'].lower()), None)
+                
+                    if not zakres: 
+                        zakres = next((f for f in pliki_na_dysku if f['name'].startswith('3')), None)
+
+                    # NOWE: ostatnia strona spersonalizowana pod handlowca
+                    # Plik z prefixem "6_" i imieniem handlowca w nazwie (np. "6_Oferta_ostatnia_Adam Trepka")
+                    # Fallback: pierwszy ogólny plik "6_" gdy spersonalizowanej wersji nie ma
+                    koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec, list(HANDLOWCY.keys()))
+
+                    seq = [okladka, wstep_slide, produkt, zakres] + wybrane_dodatki + [koniec]
+                    seq = [f for f in seq if f]
+
+                    for f_info in seq:
+                        prs = Presentation(download_file(service, f_info['id']))
+                        for slide in prs.slides:
+                            if f_info['name'].startswith('1_'):
+                                for shape in list(slide.shapes):
+                                    if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
+                                        pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']), shape.left, shape.top, shape.width, shape.height)
+                                        slide.shapes._spTree.remove(pic._element)
+                                        slide.shapes._spTree.insert(2, pic._element)
+                                        shape._element.getparent().remove(shape._element)
+
+                            for shape in slide.shapes:
+                                replace_text_in_shape(shape, replacements)
+
+                        # (v2) Unikalne nazwy plików tymczasowych - bezpieczne, gdy
+                        # dwóch handlowców generuje oferty w tym samym momencie.
+                        tmp_p = f"tmp_{uuid.uuid4().hex[:8]}_{f_info['id']}.pptx"
+                        prs.save(tmp_p)
+                        pdf = pptx_to_pdf(tmp_p)
+                        if pdf: writer.append(pdf); os.remove(tmp_p); os.remove(pdf)
+
+                    final_io = io.BytesIO(); writer.write(final_io); final_io.seek(0)
+                    pdf_bytes = final_io.getvalue()
+                    nazwa_pliku_wyjsciowego = f"Oferta_{final_brand}_{final_model}_{datetime.now().strftime('%H%M%S')}.pdf"
+                
+                    oauth_drive = get_oauth_drive_service()
+                    wiz_id = ""
+                    if oauth_drive:
+                        folder_oferty_id = pobierz_lub_stworz_folder_oferty_oauth(oauth_drive)
+                        utworzony_link = wgraj_pdf_na_dysk(oauth_drive, folder_oferty_id, nazwa_pliku_wyjsciowego, pdf_bytes)
+                        # (v2.4) Zapisujemy też PNG wizualizacji - dzięki temu przy
+                        # późniejszej edycji oferty NIE trzeba generować obrazu od nowa.
+                        try:
+                            _wiz_meta = {
+                                'name': f"Wizualizacja_{nr_o.replace('/', '_')}_{datetime.now().strftime('%H%M%S')}.png",
+                                'parents': [folder_oferty_id]
+                            }
+                            _wiz_media = MediaIoBaseUpload(io.BytesIO(st.session_state['ai_img']),
+                                                           mimetype='image/png', resumable=True)
+                            wiz_id = oauth_drive.files().create(
+                                body=_wiz_meta, media_body=_wiz_media, fields='id'
+                            ).execute().get('id', "")
+                        except Exception:
+                            wiz_id = ""
+                    else:
+                        utworzony_link = None
+                        st.warning("OAuth Drive niedostępny - PDF nie został zapisany w chmurze. Pobierz plik lokalnie poniżej.")
+                
+                    link_do_zapisu = utworzony_link if utworzony_link else "Błąd uploadu"
+
+                    # (v2) Pełne parametry oferty do późniejszej edycji (kolumna DaneOferty)
+                    dane_oferty_json = json.dumps({
+                        "handlowiec": wybrany_handlowiec,
+                        "klient": klient,
+                        "nr_o": nr_o,
+                        "brand": brand,
+                        "final_brand": final_brand,
+                        "final_model": final_model,
+                        "body": body,
+                        "segment": segment_final,
+                        "year": year,
+                        "gen_code": gen_code,
+                        "f_brand": f_brand,
+                        "f_cat": f_cat,
+                        "f_color": f_color,
+                        "paint_color": paint_color,
+                        "kategoria": kategoria,
+                        "pakiet": pakiet,
+                        "cena_manual": cena_manual,
+                        "rabat": rabat,
+                        "dodatki": [d['name'] for d in wybrane_dodatki],
+                        # (v2.4) Do odtworzenia przy edycji bez ponownej generacji:
+                        "wstep": wygenerowany_wstep,
+                        "wizualizacja_id": wiz_id,
+                        # (v2.6) Dane klienta z Pipedrive (jeśli osoba istniała):
+                        "pd_person_id": (_pd_osoba or {}).get("id", ""),
+                        "klient_email": (_pd_osoba or {}).get("email", ""),
+                        "klient_telefon": (_pd_osoba or {}).get("telefon", ""),
+                        "klient_firma": (_pd_osoba or {}).get("organizacja", ""),
+                    }, ensure_ascii=False)
+
+                    if zapisz_do_rejestru(nr_o, wybrany_handlowiec, klient, f"{final_brand} {final_model}", pakiet, final_foil_text, cena_koncowa, link_do_zapisu, dane_oferty_json):
+                        st.success(f"✅ Oferta zapisana w systemie CRM! Plik został zachowany w folderze 'Oferty'.")
+
+                    # (v2.3) Zapamiętujemy wygenerowaną ofertę w sesji - dzięki temu
+                    # przycisk pobierania i sekcja Pipedrive nie znikają po
+                    # przeładowaniu widoku (Streamlit wykonuje rerun po każdym kliknięciu).
+                    st.session_state['ostatnia_oferta'] = {
+                        "pdf_bytes": pdf_bytes,
+                        "nazwa_pliku": nazwa_pliku_wyjsciowego,
+                        "nr_o": nr_o,
+                        "klient": klient,
+                        "auto": f"{final_brand} {final_model}",
+                        "pakiet": pakiet,
+                        "cena": cena_koncowa,
+                        "pipedrive_deal": None,
+                        "pd_person_id": (_pd_osoba or {}).get("id", ""),
+                    }
+                    st.balloons()
+
 
     # ==========================================================
     # (v2.3) SEKCJA PO WYGENEROWANIU OFERTY
@@ -2554,11 +3394,16 @@ with tab_kreator:
                     _klik_pd = st.button("📤 DODAJ", key="pd_dodaj")
                 if _klik_pd:
                     with st.spinner("Dodaję szansę sprzedaży w Pipedrive..."):
-                        # (v2.6) Jeśli osoba została znaleziona już przy wpisywaniu
-                        # klienta - wiążemy szansę po jej ID (zero ryzyka duplikatu).
+                        # (v2.6/v3.0) Znalezione wcześniej ID osoby/firmy = twarde
+                        # powiązanie bez duplikatów. B2B: szansa wiąże się z FIRMĄ
+                        # (organizacją), osoba kontaktowa opcjonalnie.
+                        _jest_b2b = _oo.get('tryb') == 'B2B'
+                        _org_id = _oo.get('pd_org_id') or None
+                        if _jest_b2b and not _org_id and _oo['klient'].strip():
+                            _org_id, _ = pipedrive_znajdz_lub_utworz_org(_pd_token, _oo['klient'].strip())
                         if _oo.get('pd_person_id'):
                             _person_id, _osoba_istniala = _oo['pd_person_id'], True
-                        elif _oo['klient'].strip():
+                        elif not _jest_b2b and _oo['klient'].strip():
                             _person_id, _osoba_istniala = pipedrive_znajdz_lub_utworz_osobe(_pd_token, _oo['klient'].strip())
                         else:
                             _person_id, _osoba_istniala = (None, False)
@@ -2567,7 +3412,8 @@ with tab_kreator:
                             f"{_oo['nr_o']} | {_oo['auto']} | {_oo['pakiet']}",
                             _person_id,
                             _oo['cena'],
-                            stage_id=_stage_id
+                            stage_id=_stage_id,
+                            org_id=_org_id
                         )
                         if _deal_id:
                             if pipedrive_zalacz_pdf(_pd_token, _deal_id, _oo['pdf_bytes'], _oo['nazwa_pliku']):
@@ -2646,8 +3492,9 @@ with tab_rejestr:
                             f"{_pole(r, 'Data')} · {_handlowiec_wiersza(r)}</span>",
                             unsafe_allow_html=True)
                     with c2:
+                        _badge = "🚛 " if '"tryb": "B2B"' in _json_oferty else ""
                         st.markdown(
-                            f"{_pole(r, 'Klient') or '(klient bez nazwy)'}  \n"
+                            f"{_badge}{_pole(r, 'Klient') or '(klient bez nazwy)'}  \n"
                             f"<span style='color:#4A5568; font-size:0.85rem'>"
                             f"{_pole(r, 'Auto', 'Samochód')} · {_pole(r, 'Usługa', 'Usluga')} · "
                             f"{_pole(r, 'Cena', 'Cena netto', 'Cena końcowa')}</span>",
@@ -2663,6 +3510,16 @@ with tab_rejestr:
                                 try:
                                     _d = json.loads(_json_oferty)
                                     st.session_state['edycja'] = _d
+                                    st.session_state.pop('_ed_b2b_done', None)
+                                    st.session_state.pop('b2b_sugestia_m2', None)
+                                    # przełącz tryb aplikacji zgodnie z ofertą
+                                    st.session_state['tryb_ofertowania'] = (
+                                        "🚛 B2B - Reklama / Flota" if _d.get('tryb') == 'B2B'
+                                        else "🚗 B2C - Klient indywidualny")
+                                    # wyczyść m² z poprzedniej edycji B2B
+                                    for _k in [k for k in st.session_state.keys()
+                                               if str(k).startswith(('b2b_m2_', 'b2b_plot_'))]:
+                                        st.session_state.pop(_k, None)
                                     # Wstęp: wczyta się do edytora przy następnym przebiegu
                                     st.session_state['zaladuj_wstep'] = _d.get('wstep', '')
                                     # Wizualizacja: jeśli była zapisana na Dysku - pobieramy,
@@ -2767,6 +3624,72 @@ with tab_ustawienia:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Nie udało się dodać koloru: {e}")
+
+    st.markdown("---")
+
+    # ==========================================================
+    # (v3.0) CENNIK B2B - reklama / flota
+    # ==========================================================
+    st.markdown("### 🚛 Cennik B2B (reklama / flota)")
+    if not B2B_Z_ARKUSZA:
+        st.info(
+            "Cennik B2B działa obecnie na wartościach wbudowanych w kod "
+            "(przeniesionych z Twojego pliku Excel, z poprawionym odblaskiem 320 zł/m² i OWV 150 zł/m²). "
+            "Kliknij poniżej, aby przenieść go do arkusza - od tego momentu ceny i metraże "
+            "zmieniasz formularzem tutaj, bez dotykania kodu."
+        )
+        if st.button("📥 UTWÓRZ CENNIK B2B I ZAIMPORTUJ WARTOŚCI", disabled=not zalogowany):
+            with st.spinner("Tworzę zakładki 'Cennik B2B' i 'Metraż B2B'..."):
+                try:
+                    utworz_cennik_b2b_i_importuj()
+                    st.success("✅ Cennik B2B przeniesiony do arkusza. Odświeżam...")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Nie udało się utworzyć cennika: {e}")
+    else:
+        st.caption(f"✅ Cennik B2B działa z arkusza. Folii: {len(CENY_B2B)}, "
+                   f"plotowanie: {PLOTOWANIE_CENA_B2B:g} zł.")
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            st.markdown("#### 💵 Ceny folii (zł/m²)")
+            _fb_opcje = list(CENY_B2B.keys()) + ["➕ Nowa folia B2B..."]
+            _fb_sel = st.selectbox("Folia", _fb_opcje, key="ust_b2b_folia")
+            if _fb_sel == "➕ Nowa folia B2B...":
+                _fb_nazwa = st.text_input("Nazwa nowej folii", key="ust_b2b_folia_nowa")
+                _fb_cena_domyslna = 0.0
+            else:
+                _fb_nazwa = _fb_sel
+                _fb_cena_domyslna = float(CENY_B2B.get(_fb_sel, 0.0))
+            _fb_cena = st.number_input("Cena sprzedaży (zł/m²)", min_value=0.0, step=5.0,
+                                       value=_fb_cena_domyslna, key=f"ust_b2b_cena_{_fb_sel}")
+            if st.button("💾 ZAPISZ CENĘ", key="ust_b2b_zapisz_cene", disabled=not zalogowany):
+                if not _fb_nazwa.strip() or _fb_cena <= 0:
+                    st.error("Podaj nazwę folii i cenę większą od zera.")
+                else:
+                    try:
+                        _w = zapisz_cene_b2b(_fb_nazwa, _fb_cena)
+                        st.success(f"✅ {'Zaktualizowano' if _w == 'zaktualizowano' else 'Dodano'}: "
+                                   f"{_fb_nazwa.strip()} - {_fb_cena:g} zł/m²")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Nie udało się zapisać: {e}")
+        with col_b2:
+            st.markdown("#### 📐 Metraż (sugerowane m²)")
+            _mt_typ = st.selectbox("Typ pojazdu", list(METRAZ_B2B.keys()), key="ust_b2b_typ")
+            _mt_pozycje = ZAKRESY_B2B + list(DODATKI_M2_B2B.keys())
+            _mt_poz = st.selectbox("Pozycja (zakres lub dodatek)", _mt_pozycje, key="ust_b2b_poz")
+            _mt_aktualne = float(METRAZ_B2B.get(_mt_typ, {}).get(_mt_poz,
+                                 DODATKI_M2_B2B.get(_mt_poz, 0)))
+            _mt_m2 = st.number_input("m²", min_value=0.0, step=0.5, value=_mt_aktualne,
+                                     key=f"ust_b2b_m2_{_mt_typ}_{_mt_poz}")
+            if st.button("💾 ZAPISZ METRAŻ", key="ust_b2b_zapisz_m2", disabled=not zalogowany):
+                try:
+                    _w = zapisz_metraz_b2b(_mt_typ, _mt_poz, _mt_m2)
+                    st.success(f"✅ {'Zaktualizowano' if _w == 'zaktualizowano' else 'Dodano'}: "
+                               f"{_mt_typ} / {_mt_poz} = {_mt_m2:g} m²")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Nie udało się zapisać: {e}")
 
     st.markdown("---")
 
