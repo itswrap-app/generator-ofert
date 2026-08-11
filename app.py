@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io, os, subprocess, re, shutil, requests, base64, json, uuid
+import time, threading, ssl, socket, http.client
 from pypdf import PdfWriter
 from datetime import datetime
 from PIL import Image
@@ -890,12 +891,49 @@ Napisz teraz wstęp (zaczynając od "{wolacz},"):"""
         return _fallback_intro_text(wolacz, brand, czysta_folia, handlowiec_imie, handlowiec_stanowisko)
 
 
-def download_file(service, file_id):
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO(); downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done: _, done = downloader.next_chunk()
-    fh.seek(0); return fh
+# (v3.3) Google zamyka bezczynne połączenia HTTP, a httplib2 nie jest bezpieczny
+# wątkowo - stąd BrokenPipeError przy pobieraniu szablonów. Poniżej: blokada na
+# współdzielony klient + ponawianie z odbudową połączenia od zera.
+_DRIVE_LOCK = threading.Lock()
+_BLEDY_POLACZENIA = (BrokenPipeError, ConnectionError, TimeoutError,
+                     ssl.SSLError, socket.timeout, http.client.HTTPException, OSError)
+
+
+def nowy_drive_service():
+    """Świeże połączenie z Drive (konto serwisowe) - używane przy ponowieniu."""
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+    return build('drive', 'v3', credentials=creds, cache_discovery=False)
+
+
+def download_file(service, file_id, proby=4):
+    """Pobiera plik z Drive. Przy zerwanym połączeniu ponawia na nowym kliencie."""
+    ostatni_blad = None
+    for nr in range(proby):
+        try:
+            uzywany = service if nr == 0 else nowy_drive_service()
+            with _DRIVE_LOCK:
+                request = uzywany.files().get_media(fileId=file_id)
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request, chunksize=5 * 1024 * 1024)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk(num_retries=3)
+            fh.seek(0)
+            return fh
+        except _BLEDY_POLACZENIA as e:
+            ostatni_blad = e
+            time.sleep(1.5 * (nr + 1))   # narastająca przerwa przed kolejną próbą
+        except Exception as e:
+            ostatni_blad = e
+            if nr >= 1:
+                break
+            time.sleep(1.0)
+    raise RuntimeError(
+        f"Nie udało się pobrać szablonu z Dysku Google po {proby} próbach. "
+        f"Szczegóły: {type(ostatni_blad).__name__}: {ostatni_blad}"
+    )
 
 
 def pptx_to_pdf(input_path):
@@ -1042,12 +1080,12 @@ def wgraj_pdf_na_dysk(oauth_service, folder_id, file_name, file_bytes):
             body=file_metadata,
             media_body=media,
             fields='id, webViewLink'
-        ).execute()
-        
+        ).execute(num_retries=3)
+
         oauth_service.permissions().create(
             fileId=file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
-        ).execute()
+        ).execute(num_retries=3)
         
         return file.get('webViewLink')
     except Exception as e:
@@ -1247,7 +1285,7 @@ def pipedrive_zalacz_pdf(token, deal_id, file_bytes, file_name):
 # przy każdym takim przebiegu autoryzował się w Google i pobierał cennik
 # oraz listę plików. Teraz robi to raz na CACHE_TTL sekund.
 # ==========================================================================
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, ttl=3600)
 def get_google_clients():
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
@@ -1262,7 +1300,7 @@ def _lista_pptx_w_folderze(service, folder_id):
     results = service.files().list(
         q=f"'{folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false",
         fields="files(id, name)", supportsAllDrives=True, includeItemsFromAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     return results.get('files', [])
 
 
@@ -3138,7 +3176,12 @@ with tab_kreator:
                         st.warning("Nie znalazłem karty wstępu (plik z „1b\" w nazwie) - oferta powstanie bez strony 2.")
 
                     for f_info in seq:
-                        prs = Presentation(download_file(service, f_info['id']))
+                        try:
+                            prs = Presentation(download_file(service, f_info['id']))
+                        except Exception as e:
+                            st.error(f"Nie udało się pobrać karty {f_info['name']} z Dysku Google. "
+                                     f"Spróbuj ponownie za chwilę - to zwykle chwilowy problem z połączeniem.\n\n{e}")
+                            st.stop()
                         _nazwa_l = f_info['name'].lower()
                         for slide in prs.slides:
                             # 1) OKŁADKA: podmiana zdjęcia poglądowego na wizualizację klienta
@@ -3537,7 +3580,12 @@ with tab_kreator:
                     seq = [f for f in seq if f]
 
                     for f_info in seq:
-                        prs = Presentation(download_file(service, f_info['id']))
+                        try:
+                            prs = Presentation(download_file(service, f_info['id']))
+                        except Exception as e:
+                            st.error(f"Nie udało się pobrać karty {f_info['name']} z Dysku Google. "
+                                     f"Spróbuj ponownie za chwilę - to zwykle chwilowy problem z połączeniem.\n\n{e}")
+                            st.stop()
                         for slide in prs.slides:
                             if f_info['name'].startswith('1_'):
                                 for shape in list(slide.shapes):
