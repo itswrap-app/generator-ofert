@@ -1444,6 +1444,7 @@ def odswiez_wszystkie_dane():
     try:
         pobierz_cennik_b2b.clear()
         pobierz_zestawy_b2b.clear()
+        pobierz_mapowanie_zestawow.clear()
     except Exception:
         pass
 
@@ -1978,6 +1979,74 @@ def wstep_b2b_standardowy(klient_nazwa, autor_imie, autor_stanowisko):
     return f"{tresc}\n\nZ motoryzacyjnym pozdrowieniem\n{autor_imie}\n{autor_stanowisko}"
 
 
+
+# ==========================================================================
+# (v3.2) DOPASOWANIE FOLII -> KOMPLET KART (podfolder na Dysku)
+# Fuzzy-matching po nazwach mylił warianty tej samej folii (IJ180-10 vs -114),
+# więc: 1) mocniejsza heurystyka z cechami wyróżniającymi,
+#       2) trwałe mapowanie zapisywane w arkuszu (zakładka "Zestawy B2B"),
+#          które ma bezwzględne pierwszeństwo nad heurystyką.
+# ==========================================================================
+_CECHY_WYROZNIAJACE = ["bezbarwn", "biał", "bial", "poddruk", "odblask", "polimer",
+                       "oracal", "barwion", "owv", "szyb", "ij180", "polimerow"]
+
+
+def _tokeny(tekst):
+    return {t for t in re.split(r"[^0-9a-ząćęłńóśźż]+", str(tekst).lower()) if len(t) > 2}
+
+
+def dopasuj_zestaw_do_folii(folia, nazwy_zestawow):
+    """Zwraca indeks najlepiej pasującego podfolderu (0 gdy brak sensownego trafienia)."""
+    if not nazwy_zestawow:
+        return 0
+    f_low = str(folia).lower()
+    f_tok = _tokeny(folia)
+    najlepszy, najlepszy_pkt = 0, -10 ** 6
+    for i, nazwa in enumerate(nazwy_zestawow):
+        n_low = str(nazwa).lower()
+        pkt = 2 * len(f_tok & _tokeny(nazwa))
+        for cecha in _CECHY_WYROZNIAJACE:
+            w_folii, w_nazwie = cecha in f_low, cecha in n_low
+            if w_folii and w_nazwie:
+                pkt += 3
+            elif w_folii != w_nazwie:
+                pkt -= 2          # cecha tylko po jednej stronie = to inny wariant folii
+        if pkt > najlepszy_pkt:
+            najlepszy, najlepszy_pkt = i, pkt
+    return najlepszy
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_mapowanie_zestawow():
+    """Zakładka 'Zestawy B2B': Folia | Podfolder. Puste/brak = działa heurystyka."""
+    _, gs_client = get_google_clients()
+    try:
+        ws = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Zestawy B2B")
+        mapa = {}
+        for w in ws.get_all_values()[1:]:
+            w = list(w) + ["", ""]
+            folia, podfolder = str(w[0]).strip(), str(w[1]).strip()
+            if folia and podfolder:
+                mapa[folia] = podfolder
+        return mapa
+    except Exception:
+        return {}
+
+
+def zapisz_mapowanie_zestawu(folia, podfolder):
+    """Zapamiętuje na stałe: dana folia -> ten komplet kart."""
+    ws, _ = _pobierz_lub_utworz_zakladke("Zestawy B2B", ["Folia", "Podfolder"], rows=60, cols=4)
+    wartosci = ws.get_all_values()
+    for i, w in enumerate(wartosci[1:], start=2):
+        if len(w) > 0 and str(w[0]).strip() == folia.strip():
+            ws.update(values=[[folia.strip(), podfolder.strip()]], range_name=f"A{i}:B{i}")
+            pobierz_mapowanie_zestawow.clear()
+            return "zaktualizowano"
+    ws.append_row([folia.strip(), podfolder.strip()])
+    pobierz_mapowanie_zestawow.clear()
+    return "zapisano"
+
+
 # --- APLIKACJA ---
 st.set_page_config(
     page_title="IT'S WRAP - Generator Ofert",
@@ -2337,6 +2406,7 @@ FOIL_GROUPS, KATEGORIE_DLA_PRODUCENTA, FOLIE_Z_ARKUSZA = pobierz_folie()
 CENY_B2B, METRAZ_B2B, DODATKI_M2_B2B, PLOTOWANIE_CENA_B2B, B2B_Z_ARKUSZA = pobierz_cennik_b2b()
 # (v3.1) Komplety kart B2B (podfolder = folia) + karty wspólne
 ZESTAWY_B2B, PLIKI_B2B_WSPOLNE = pobierz_zestawy_b2b()
+MAPA_ZESTAWOW_B2B = pobierz_mapowanie_zestawow()
 
 try:
     df_cennik = pobierz_cennik()
@@ -2854,24 +2924,33 @@ with tab_kreator:
                          "„Odśwież dane z arkusza\".")
             else:
                 _zestawy_nazwy = list(ZESTAWY_B2B.keys())
-                # auto-dopasowanie podfolderu do pierwszej wybranej folii (po słowach kluczowych)
-                _auto_idx = 0
-                if folie_b2b:
-                    _slowa = [w for w in re.split(r"[^0-9a-ząćęłńóśźż]+", folie_b2b[0].lower()) if len(w) > 2]
-                    _najlepszy, _pkt = 0, 0
-                    for _i, _n in enumerate(_zestawy_nazwy):
-                        _nl = _n.lower()
-                        _p = sum(1 for w in _slowa if w in _nl)
-                        if _p > _pkt:
-                            _najlepszy, _pkt = _i, _p
-                    _auto_idx = _najlepszy
+                _folia_glowna = folie_b2b[0] if folie_b2b else ""
+                # 1) zapamiętane mapowanie ma pierwszeństwo, 2) heurystyka jako podpowiedź
+                _zapamietany = MAPA_ZESTAWOW_B2B.get(_folia_glowna)
+                if _zapamietany in _zestawy_nazwy:
+                    _auto_idx = _zestawy_nazwy.index(_zapamietany)
+                    _zrodlo = "zapamiętane"
+                else:
+                    _auto_idx = dopasuj_zestaw_do_folii(_folia_glowna, _zestawy_nazwy) if _folia_glowna else 0
+                    _zrodlo = "podpowiedź"
                 zestaw_wybrany = st.selectbox(
                     "Zestaw kart (folder na Dysku)", _zestawy_nazwy,
                     index=_eidx(_zestawy_nazwy, ED.get('zestaw_b2b'), default=_auto_idx),
-                    help="Każda folia ma własny komplet kart 1-5. System podpowiada zestaw "
-                         "pasujący do wybranej folii - możesz go zmienić.")
-                st.caption("Karty w zestawie: " + ", ".join(f['name'].replace('.pptx', '')
-                                                            for f in ZESTAWY_B2B[zestaw_wybrany]))
+                    help="Każda folia ma własny komplet kart 1-5. Wybór możesz zapamiętać "
+                         "na stałe przyciskiem poniżej.")
+                st.caption(("✅ Dopasowanie zapamiętane dla tej folii. " if _zrodlo == "zapamiętane"
+                            else "💡 Dopasowanie automatyczne - sprawdź i zapamiętaj, jeśli poprawne. ")
+                           + "Karty: " + ", ".join(f['name'].replace('.pptx', '')
+                                                   for f in ZESTAWY_B2B[zestaw_wybrany]))
+                if _folia_glowna and MAPA_ZESTAWOW_B2B.get(_folia_glowna) != zestaw_wybrany:
+                    if st.button("💾 Zapamiętaj to dopasowanie dla wybranej folii",
+                                 key="b2b_zapamietaj_zestaw", disabled=not zalogowany):
+                        try:
+                            zapisz_mapowanie_zestawu(_folia_glowna, zestaw_wybrany)
+                            st.success("Zapamiętane - od teraz ta folia zawsze użyje tego kompletu kart.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Nie udało się zapisać: {e}")
 
             st.markdown("---")
             st.write("💰 **Kalkulacja (widoczna tylko dla Ciebie - m² nie trafią do PDF)**")
