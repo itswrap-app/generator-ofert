@@ -13,7 +13,11 @@ import random
 
 # --- NOWY LINK DO CENNIKA v3 ---
 LINK_DO_ARKUSZA = "https://docs.google.com/spreadsheets/d/1USF81hOinAP_vvz1QZuoNyRCT1ezJcXTDDB6RjuYtrY/edit"
-PARENT_FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"
+PARENT_FOLDER_ID = "12HRnKn9KrZy_C1BSgv24PGD-Gl8lTRmn"   # folder główny (oferty/archiwum)
+
+# (v3.1) Szablony rozdzielone na dwa podfoldery:
+PARENT_FOLDER_ID_B2C = "1VzYJ1E_zoWn0ChHQSWo183Bj_F89U0V2"   # karty B2C (PPF / zmiana koloru)
+PARENT_FOLDER_ID_B2B = "1zv76d1pE-w_u7uv0p4cYiPGssboFfT6U"   # karty B2B - podfolder per folia
 
 # Co ile sekund odświeżać dane z Google (cennik, szablony, rejestr, handlowcy).
 # Dzięki cache aplikacja NIE odpytuje Google przy każdym kliknięciu/wpisaniu litery.
@@ -91,7 +95,8 @@ FOIL_GROUPS = {
     "XPEL (Folie Ochronne PPF)": {
         "Bezbarwne (Twój obecny kolor)": [
             "XPEL Ultimate Plus (Wysoki Połysk)",
-            "XPEL Stealth (Mat/Satyna)"
+            "XPEL Stealth (Mat/Satyna)",
+            "XPEL Xtreme (Ochrona Premium)"
         ],
         "XPEL Color (Zmiana Koloru PPF)": [
             "Black (Połysk)",
@@ -1253,16 +1258,47 @@ def get_google_clients():
     return service, gs_client
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def pobierz_pliki_szablonow():
-    service, _ = get_google_clients()
+def _lista_pptx_w_folderze(service, folder_id):
     results = service.files().list(
-        q=f"'{PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false",
-        fields="files(id, name)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True
+        q=f"'{folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation' and trashed=false",
+        fields="files(id, name)", supportsAllDrives=True, includeItemsFromAllDrives=True
     ).execute()
     return results.get('files', [])
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_pliki_szablonow():
+    """(v3.1) Karty B2C - z podfolderu B2C (fallback: folder główny)."""
+    service, _ = get_google_clients()
+    pliki = _lista_pptx_w_folderze(service, PARENT_FOLDER_ID_B2C)
+    if not pliki:
+        pliki = _lista_pptx_w_folderze(service, PARENT_FOLDER_ID)
+    return pliki
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def pobierz_zestawy_b2b():
+    """
+    (v3.1) Karty B2B: w folderze B2B każda folia ma WŁASNY podfolder z kompletem
+    kart 1-5. Zwraca (zestawy, pliki_wspolne):
+      zestawy       = {nazwa_podfolderu: [pptx posortowane po nazwie]}
+      pliki_wspolne = pptx leżące bezpośrednio w folderze B2B (np. karta wstępu)
+    """
+    service, _ = get_google_clients()
+    zestawy, wspolne = {}, []
+    try:
+        podfoldery = service.files().list(
+            q=f"'{PARENT_FOLDER_ID_B2B}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id, name)", supportsAllDrives=True, includeItemsFromAllDrives=True
+        ).execute().get('files', [])
+        for pf in podfoldery:
+            pliki = _lista_pptx_w_folderze(service, pf['id'])
+            if pliki:
+                zestawy[pf['name']] = sorted(pliki, key=lambda x: x['name'].lower())
+        wspolne = _lista_pptx_w_folderze(service, PARENT_FOLDER_ID_B2B)
+    except Exception:
+        pass
+    return zestawy, wspolne
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -1407,6 +1443,7 @@ def odswiez_wszystkie_dane():
     pobierz_folie.clear()
     try:
         pobierz_cennik_b2b.clear()
+        pobierz_zestawy_b2b.clear()
     except Exception:
         pass
 
@@ -1854,6 +1891,93 @@ def okladka_standardowa_b2b(typ_pojazdu, pojazd_opis=""):
     return _ai_obraz_z_promptu(prompt)
 
 
+
+# ==========================================================================
+# (v3.1) WSTAWIANIE WIZUALIZACJI W KARTY B2B
+# Nowe szablony nie mają tagu {{FOTO_AUTA}}:
+#  - na okładce jest gotowe zdjęcie poglądowe -> podmieniamy je na wizualizację klienta
+#  - karta "4_wizualizacja" ma puste pole -> wstawiamy obraz wyśrodkowany
+# ==========================================================================
+def _podmien_glowne_zdjecie(slide, img_bytes, min_udzial=0.15, slide_w=None, slide_h=None):
+    """Podmienia największe zdjęcie na slajdzie (zachowując pozycję, rozmiar i warstwę)."""
+    kandydaci = [sh for sh in slide.shapes
+                 if getattr(sh, 'shape_type', None) == 13 and sh.width and sh.height]
+    if not kandydaci:
+        return False
+    najw = max(kandydaci, key=lambda s: (s.width or 0) * (s.height or 0))
+    if slide_w and slide_h:
+        if ((najw.width or 0) * (najw.height or 0)) < min_udzial * slide_w * slide_h:
+            return False  # to tylko logo/ikona - nie ruszamy
+    try:
+        pic = slide.shapes.add_picture(io.BytesIO(img_bytes), najw.left, najw.top,
+                                       najw.width, najw.height)
+        stary = najw._element
+        slide.shapes._spTree.remove(pic._element)
+        stary.addprevious(pic._element)     # ta sama warstwa co oryginał
+        stary.getparent().remove(stary)
+        return True
+    except Exception:
+        return False
+
+
+def _wstaw_obraz_wysrodkowany(slide, prs, img_bytes):
+    """
+    Wstawia obraz w wolne pole slajdu: pomiędzy elementami z górnej strefy
+    (nagłówek/linia) a stopką. Zachowuje proporcje obrazu.
+    """
+    try:
+        W, H = prs.slide_width, prs.slide_height
+        dolne_krawedzie, gorne_krawedzie = [], []
+        for sh in slide.shapes:
+            t = sh.top or 0
+            h = sh.height or 0
+            if t < 0.25 * H:
+                dolne_krawedzie.append(t + h)
+            if t > 0.60 * H:
+                gorne_krawedzie.append(t)
+        gora = max(dolne_krawedzie) if dolne_krawedzie else int(0.15 * H)
+        dol = min(gorne_krawedzie) if gorne_krawedzie else int(0.85 * H)
+        mx, my = int(0.05 * W), int(0.02 * H)
+        obszar_l, obszar_w = mx, W - 2 * mx
+        obszar_t = gora + my
+        obszar_h = max(dol - my - obszar_t, int(0.2 * H))
+
+        img = Image.open(io.BytesIO(img_bytes))
+        iw, ih = img.size
+        ratio = iw / ih if ih else 1.0
+        w = obszar_w
+        h = int(w / ratio)
+        if h > obszar_h:
+            h = obszar_h
+            w = int(h * ratio)
+        left = obszar_l + (obszar_w - w) // 2
+        top = obszar_t + (obszar_h - h) // 2
+        slide.shapes.add_picture(io.BytesIO(img_bytes), left, top, w, h)
+        return True
+    except Exception:
+        return False
+
+
+# (v3.1) Standardowy wstęp do ofert B2B na folie reklamowe (strona 2)
+TEKST_WSTEPU_B2B_STANDARD = (
+    "{klient}, Bardzo dziękuję za zainteresowanie naszą ofertą folii graficznych. "
+    "Wybór drukowanej folii samochodowej to doskonała decyzja, która przemieni pojazd "
+    "w mobilną, przyciągającą wzrok wizytówkę firmy. Przygotowanie graficzne i profesjonalny "
+    "wydruk nie tylko zapewnią idealne odwzorowanie kolorów oraz wysoką czytelność przekazu, "
+    "ale również zabezpieczą fabryczny lakier przed promieniowaniem UV, drobnymi zarysowaniami "
+    "i warunkami atmosferycznymi. Dzięki montażowi przez certyfikowanych aplikatorów samochód "
+    "zyska profesjonalny wygląd, który skutecznie wyróżni markę na drodze. "
+    "Zapraszam do zapoznania się ze szczegółami przygotowanej oferty i wyceny."
+)
+
+
+def wstep_b2b_standardowy(klient_nazwa, autor_imie, autor_stanowisko):
+    """Buduje standardowy tekst wstępu B2B wraz z podpisem."""
+    zwrot = (klient_nazwa or "").strip() or "Szanowni Państwo"
+    tresc = TEKST_WSTEPU_B2B_STANDARD.format(klient=zwrot)
+    return f"{tresc}\n\nZ motoryzacyjnym pozdrowieniem\n{autor_imie}\n{autor_stanowisko}"
+
+
 # --- APLIKACJA ---
 st.set_page_config(
     page_title="IT'S WRAP - Generator Ofert",
@@ -2211,6 +2335,8 @@ FOIL_GROUPS, KATEGORIE_DLA_PRODUCENTA, FOLIE_Z_ARKUSZA = pobierz_folie()
 
 # (v3.0) Cennik B2B (reklama/flota) - z arkusza lub domyślny z kodu
 CENY_B2B, METRAZ_B2B, DODATKI_M2_B2B, PLOTOWANIE_CENA_B2B, B2B_Z_ARKUSZA = pobierz_cennik_b2b()
+# (v3.1) Komplety kart B2B (podfolder = folia) + karty wspólne
+ZESTAWY_B2B, PLIKI_B2B_WSPOLNE = pobierz_zestawy_b2b()
 
 try:
     df_cennik = pobierz_cennik()
@@ -2355,7 +2481,7 @@ with st.sidebar:
             "1️⃣ Gotowa wizualizacja od klienta",
             "2️⃣ Projekt na płasko (siatka) → AI robi 3D",
             "3️⃣ Materiały klienta (logo/brand) → AI robi koncept",
-            "4️⃣ Grafika standardowa (brak materiałów)",
+            "4️⃣ Brak materiałów - zdjęcie z szablonu",
         ]
         wariant_okladki = st.radio("Skąd grafika na okładkę?", WARIANTY_OKLADKI,
                                    index=_eidx(WARIANTY_OKLADKI, ED.get('wariant_okladki')))
@@ -2429,15 +2555,13 @@ with st.sidebar:
                     st.session_state['ai_img'] = _img
                     st.success("Koncept gotowy ✅ (pamiętaj: to wizualizacja poglądowa, projekt produkcyjny robi grafik)")
 
-        else:  # wariant 4 - standard
-            st.caption("Użyjemy standardowej grafiki okładkowej ITS WRAP (plik okladka_b2b.png w repo "
-                       "aplikacji albo neutralny wrap wygenerowany przez AI - bez treści klienta).")
-            if st.button("🖼 USTAW OKŁADKĘ STANDARDOWĄ", disabled=not zalogowany, key="b2b_gen_w4"):
-                with st.spinner("Przygotowuję standardową okładkę..."):
-                    _img = okladka_standardowa_b2b(typ_pojazdu, pojazd_opis)
-                if _img:
-                    st.session_state['ai_img'] = _img
-                    st.success("Okładka standardowa ustawiona ✅")
+        else:  # wariant 4 - brak materiałów od klienta
+            st.caption("Na okładce zostanie **zdjęcie poglądowe z szablonu** (to przypisane przez grafika "
+                       "do wybranej folii), a karta z wizualizacją projektu zostanie pominięta.")
+            if st.session_state.get('ai_img') is not None:
+                if st.button("🗑️ Usuń wgraną wizualizację", key="b2b_clr_w4"):
+                    st.session_state.pop('ai_img', None)
+                    st.rerun()
 
         # --- (v3.0) AI szacuje m² z projektu (rolki 1,37 / 1,52 m + zapas) ---
         if _projekt_do_estymacji is not None:
@@ -2651,6 +2775,7 @@ with st.sidebar:
         wybrane_dodatki = []
     else:
         folie_dane, folie_b2b, wybrane_dodatki_b2b = {}, [], []
+        zestaw_wybrany = None
         typ_pojazdu = pojazd_opis = zakres_b2b = ""
         bus_dlugi = bus_wysoki = dach_b2b = False
         wariant_okladki = ""
@@ -2719,6 +2844,35 @@ with tab_kreator:
             nr_o = st.text_input("Numer oferty",
                                  value=ED.get('nr_o', f"IW-R/{datetime.now().strftime('%Y/%m/%d')}/01"))
 
+            # (v3.1) Komplet kart = podfolder w folderze B2B (jeden na folię).
+            st.markdown("---")
+            st.write("🗂 **Komplet kart do oferty**")
+            if not ZESTAWY_B2B:
+                zestaw_wybrany = None
+                st.error("Nie znalazłem podfolderów z kartami w folderze B2B na Dysku. "
+                         "Wgraj komplety kart (po jednym podfolderze na folię) i kliknij "
+                         "„Odśwież dane z arkusza\".")
+            else:
+                _zestawy_nazwy = list(ZESTAWY_B2B.keys())
+                # auto-dopasowanie podfolderu do pierwszej wybranej folii (po słowach kluczowych)
+                _auto_idx = 0
+                if folie_b2b:
+                    _slowa = [w for w in re.split(r"[^0-9a-ząćęłńóśźż]+", folie_b2b[0].lower()) if len(w) > 2]
+                    _najlepszy, _pkt = 0, 0
+                    for _i, _n in enumerate(_zestawy_nazwy):
+                        _nl = _n.lower()
+                        _p = sum(1 for w in _slowa if w in _nl)
+                        if _p > _pkt:
+                            _najlepszy, _pkt = _i, _p
+                    _auto_idx = _najlepszy
+                zestaw_wybrany = st.selectbox(
+                    "Zestaw kart (folder na Dysku)", _zestawy_nazwy,
+                    index=_eidx(_zestawy_nazwy, ED.get('zestaw_b2b'), default=_auto_idx),
+                    help="Każda folia ma własny komplet kart 1-5. System podpowiada zestaw "
+                         "pasujący do wybranej folii - możesz go zmienić.")
+                st.caption("Karty w zestawie: " + ", ".join(f['name'].replace('.pptx', '')
+                                                            for f in ZESTAWY_B2B[zestaw_wybrany]))
+
             st.markdown("---")
             st.write("💰 **Kalkulacja (widoczna tylko dla Ciebie - m² nie trafią do PDF)**")
             if not folie_dane:
@@ -2767,18 +2921,26 @@ with tab_kreator:
             + (" + dach" if dach_b2b else "") \
             + (" (bus długi)" if bus_dlugi else "") + (" (bus wysoki)" if bus_wysoki else "")
 
+        _autor_imie = "Adam Trepka"
+        _autor_stan = HANDLOWCY.get(_autor_imie, {}).get("stanowisko", "CEO It`s Wrap")
+        _klient_do_wstepu = (osoba_kontaktowa.strip() or firma.strip())
+
         col_w1, col_w2 = st.columns([1, 3])
         with col_w1:
-            if st.button("🪄 GENERUJ TEKST WSTĘPU", disabled=not zalogowany, key="b2b_wstep_gen"):
-                _autor_imie = "Adam Trepka"
-                _autor_stan = HANDLOWCY.get(_autor_imie, {}).get("stanowisko", "CEO It`s Wrap")
+            st.caption("Domyślnie wstawiamy tekst standardowy dla folii reklamowych. "
+                       "Możesz go dowolnie poprawić albo wygenerować wersję AI.")
+            if st.button("📄 TEKST STANDARDOWY", key="b2b_wstep_std"):
+                st.session_state['wstep_editor'] = wstep_b2b_standardowy(
+                    _klient_do_wstepu, _autor_imie, _autor_stan)
+                st.rerun()
+            if st.button("🪄 WERSJA AI (opcjonalnie)", disabled=not zalogowany, key="b2b_wstep_gen"):
                 with st.spinner("AI pisze wstęp B2B..."):
                     st.session_state['wstep_editor'] = generate_ai_intro_text_b2b(
                         firma, pojazd_opis or typ_pojazdu, _zakres_opis_krotki,
                         list(folie_dane.keys()), _autor_imie, _autor_stan)
                 st.rerun()
             if st.session_state.get('wstep_editor', '').strip():
-                if st.button("🗑️ Wyczyść (auto przy PDF)", key="b2b_wstep_clr"):
+                if st.button("🗑️ Wyczyść", key="b2b_wstep_clr"):
                     st.session_state['wstep_editor'] = ''
                     st.rerun()
         with col_w2:
@@ -2790,8 +2952,11 @@ with tab_kreator:
         # (v3.0) GENEROWANIE OFERTY B2B
         # ==========================================================
         if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany, key="b2b_generuj"):
-            if 'ai_img' not in st.session_state:
-                st.error("Okładka jest wymagana - przygotuj ją w panelu bocznym (sekcja 'Okładka oferty').")
+            if not zestaw_wybrany:
+                st.error("Brak zestawu kart - wgraj podfoldery z kartami do folderu B2B na Dysku.")
+            elif ('ai_img' not in st.session_state) and not wariant_okladki.startswith("4"):
+                st.error("Przygotuj wizualizację w panelu bocznym albo wybierz wariant "
+                         "„4 - Brak materiałów\" (wtedy zostanie zdjęcie z szablonu).")
             elif not folie_dane:
                 st.error("Wybierz co najmniej jedną folię w panelu bocznym.")
             else:
@@ -2809,9 +2974,10 @@ with tab_kreator:
                     if _wstep_z_edytora:
                         wygenerowany_wstep = _wstep_z_edytora
                     else:
-                        wygenerowany_wstep = generate_ai_intro_text_b2b(
-                            firma, pojazd_opis or typ_pojazdu, _zakres_opis_krotki,
-                            _folie_lista, AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO)
+                        # (v3.1) domyślnie tekst standardowy dla folii reklamowych
+                        wygenerowany_wstep = wstep_b2b_standardowy(
+                            (osoba_kontaktowa.strip() or firma.strip()),
+                            AUTOR_WSTEPU_IMIE, AUTOR_WSTEPU_STANOWISKO)
 
                     _fmt2 = lambda x: f"{x:,.2f} zł".replace(",", "X").replace(".", ",").replace("X", " ")
                     replacements = {
@@ -2825,6 +2991,7 @@ with tab_kreator:
                         "{{NR_OFERTY}}": nr_o,
                         "{{LICZBA_POJAZDOW}}": str(liczba_pojazdow),
                         "{{CENA_ZA_POJAZD}}": _fmt2(cena_za_pojazd),
+                        "{{CENA_KATALOG}}": _fmt2(cena_za_pojazd * liczba_pojazdow),
                         "{{CENA_KONCOWA}}": _fmt2(cena_koncowa),
                         "{{WSTEP_AI}}": wygenerowany_wstep,
                         "{{HANDLOWIEC_IMIE}}": wybrany_handlowiec,
@@ -2832,55 +2999,98 @@ with tab_kreator:
                         "{{HANDLOWIEC_EMAIL}}": dane_handlowca["email"],
                     }
 
-                    def _plik_b2b(*slowa):
-                        for f in pliki_na_dysku:
+                    # ==========================================================
+                    # (v3.1) SEKWENCJA KART B2B
+                    # Komplet 1-5 pochodzi z podfolderu wybranej folii.
+                    # Karta wstępu (strona 2) doklejana jest zaraz po okładce -
+                    # szukamy jej w podfolderze, w folderze B2B, a na końcu w B2C.
+                    # ==========================================================
+                    _zestaw_pliki = ZESTAWY_B2B.get(zestaw_wybrany, [])
+
+                    def _znajdz(pliki, *warunki):
+                        for f in pliki:
                             n = f['name'].lower()
-                            if n.startswith('b2b') and all(s.lower() in n for s in slowa):
+                            if all(w.lower() in n for w in warunki):
                                 return f
                         return None
 
-                    okladka = _plik_b2b('b2b_1_') or _plik_b2b('b2b_1 ')
-                    wstep_slide = _plik_b2b('b2b_1b')
-                    karty = []
-                    for _f in _folie_lista:
-                        _kw = FOLIE_B2B_SZABLONY.get(_f, '')
-                        _k = _plik_b2b('b2b_2', _kw) if _kw else None
-                        if _k and _k not in karty:
-                            karty.append(_k)
-                    if any("biał" in f.lower() for f in _folie_lista):
-                        _k = _plik_b2b('b2b_2', 'latex') or _plik_b2b('b2b_2', 'white')
-                        if _k and _k not in karty:
-                            karty.append(_k)
-                    if any("bezbarwn" in f.lower() for f in _folie_lista):
-                        _k = _plik_b2b('b2b_2', 'korzysci') or _plik_b2b('b2b_2', 'rezydualna')
-                        if _k and _k not in karty:
-                            karty.append(_k)
-                    zakres_slide = _plik_b2b('b2b_3')
-                    koniec = wybierz_strone_koncowa(pliki_na_dysku, wybrany_handlowiec,
-                                                    list(HANDLOWCY.keys()), prefix='B2B_6')
+                    okladka = next((f for f in _zestaw_pliki
+                                    if f['name'].lower().startswith('1') and '1b' not in f['name'].lower()), None)
+                    karta_wiz = _znajdz(_zestaw_pliki, 'wizualizacj')
+                    wstep_slide = (_znajdz(_zestaw_pliki, '1b') or _znajdz(PLIKI_B2B_WSPOLNE, '1b')
+                                   or _znajdz(pliki_na_dysku, '1b'))
 
-                    seq = [okladka, wstep_slide] + karty + [zakres_slide] + wybrane_dodatki_b2b + [koniec]
+                    # pozostałe karty zestawu w kolejności nazw (2_, 3_, 5_ ...)
+                    _pozostale = [f for f in _zestaw_pliki
+                                  if f not in (okladka, karta_wiz, wstep_slide)]
+
+                    # karty opisowe innych wybranych folii (gdy projekt łączy kilka materiałów)
+                    _karty_extra = []
+                    if len(_folie_lista) > 1:
+                        for _f in _folie_lista[1:]:
+                            _slowa_f = [w for w in re.split(r"[^0-9a-ząćęłńóśźż]+", _f.lower()) if len(w) > 2]
+                            for _nazwa_z, _pliki_z in ZESTAWY_B2B.items():
+                                if _nazwa_z == zestaw_wybrany:
+                                    continue
+                                if sum(1 for w in _slowa_f if w in _nazwa_z.lower()) >= 2:
+                                    _k = next((p for p in _pliki_z if p['name'].lower().startswith('2')), None)
+                                    if _k and _k not in _karty_extra:
+                                        _karty_extra.append(_k)
+                                    break
+
+                    # karta wizualizacji tylko wtedy, gdy mamy grafikę projektu
+                    _mam_wizualizacje = (not wariant_okladki.startswith("4")) and ('ai_img' in st.session_state)
+
+                    seq = [okladka, wstep_slide]
+                    for _p in _pozostale:
+                        seq.append(_p)
+                        if _p is _pozostale[0] and _karty_extra:
+                            seq.extend(_karty_extra)
+                    if _mam_wizualizacje and karta_wiz:
+                        # kartę z wizualizacją wstawiamy przed ostatnią kartą zestawu (5_polecamy)
+                        seq.insert(max(len(seq) - 1, 1), karta_wiz)
+                    seq = seq + wybrane_dodatki_b2b
                     seq = [f for f in seq if f]
+
                     if not seq:
-                        st.error("Nie znalazłem na Dysku żadnych szablonów B2B (pliki B2B_1_*, B2B_2_*, B2B_3_*...). "
-                                 "Wgraj szablony do folderu aplikacji - listę plików i tagów masz w dokumentacji.")
+                        st.error("Nie znalazłem kart w wybranym zestawie. Sprawdź zawartość podfolderu na Dysku.")
                         st.stop()
-                    _braki = [n for n, f in [("B2B_1_ (okładka)", okladka), ("B2B_1b (wstęp)", wstep_slide),
-                                             ("B2B_3 (zakres/cena)", zakres_slide)] if f is None]
-                    if _braki:
-                        st.warning("Brakuje szablonów: " + ", ".join(_braki) + " - oferta powstanie bez tych stron.")
+                    if wstep_slide is None:
+                        st.warning("Nie znalazłem karty wstępu (plik z „1b\" w nazwie) - oferta powstanie bez strony 2.")
 
                     for f_info in seq:
                         prs = Presentation(download_file(service, f_info['id']))
+                        _nazwa_l = f_info['name'].lower()
                         for slide in prs.slides:
-                            if f_info['name'].lower().startswith(('b2b_1_', 'b2b_1 ')):
+                            # 1) OKŁADKA: podmiana zdjęcia poglądowego na wizualizację klienta
+                            if f_info is okladka and _mam_wizualizacje:
+                                _zrobione = False
                                 for shape in list(slide.shapes):
-                                    if "{{FOTO_AUTA}}" in shape.name or (shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text):
+                                    if "{{FOTO_AUTA}}" in shape.name or (
+                                        shape.has_text_frame and "{{FOTO_AUTA}}" in shape.text
+                                    ):
                                         pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']),
                                                                        shape.left, shape.top, shape.width, shape.height)
                                         slide.shapes._spTree.remove(pic._element)
                                         slide.shapes._spTree.insert(2, pic._element)
                                         shape._element.getparent().remove(shape._element)
+                                        _zrobione = True
+                                if not _zrobione:
+                                    _podmien_glowne_zdjecie(slide, st.session_state['ai_img'],
+                                                            slide_w=prs.slide_width, slide_h=prs.slide_height)
+                            # 2) KARTA WIZUALIZACJI: obraz wyśrodkowany w wolnym polu
+                            if f_info is karta_wiz and _mam_wizualizacje:
+                                _wstawione = False
+                                for shape in list(slide.shapes):
+                                    if "{{FOTO_AUTA}}" in shape.name or "{{WIZUALIZACJA}}" in shape.name:
+                                        pic = slide.shapes.add_picture(io.BytesIO(st.session_state['ai_img']),
+                                                                       shape.left, shape.top, shape.width, shape.height)
+                                        slide.shapes._spTree.remove(pic._element)
+                                        slide.shapes._spTree.insert(2, pic._element)
+                                        shape._element.getparent().remove(shape._element)
+                                        _wstawione = True
+                                if not _wstawione:
+                                    _wstaw_obraz_wysrodkowany(slide, prs, st.session_state['ai_img'])
                             for shape in slide.shapes:
                                 replace_text_in_shape(shape, replacements)
                         tmp_p = f"tmp_{uuid.uuid4().hex[:8]}_{f_info['id']}.pptx"
@@ -2923,6 +3133,7 @@ with tab_kreator:
                         "folie": {f: {"m2": d["m2"], "plot": d["plot"]} for f, d in folie_dane.items()},
                         "liczba_pojazdow": liczba_pojazdow, "rabat": rabat,
                         "wariant_okladki": wariant_okladki,
+                        "zestaw_b2b": zestaw_wybrany,
                         "dodatki": [d['name'] for d in wybrane_dodatki_b2b],
                         "wstep": wygenerowany_wstep,
                         "wizualizacja_id": wiz_id,
