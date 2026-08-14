@@ -2085,6 +2085,108 @@ def zapisz_mapowanie_zestawu(folia, podfolder):
     return "zapisano"
 
 
+
+# ==========================================================================
+# (v3.4) OBSŁUGA PLIKÓW PDF W UPLOADERACH B2B
+# Projekty od klientów często przychodzą jako PDF (nie obraz) - renderujemy
+# pierwszą stronę do PNG przez PyMuPDF (biblioteka bez zależności systemowych,
+# działa na Streamlit Cloud po dopisaniu "PyMuPDF" do requirements.txt).
+# ==========================================================================
+def _pdf_pierwsza_strona_do_png(pdf_bytes, dpi=200):
+    """Renderuje 1. stronę PDF do bajtów PNG. Zwraca None, gdy PyMuPDF niedostępny."""
+    try:
+        import pymupdf as fitz  # PyMuPDF (nowa nazwa pakietu importu)
+    except ImportError:
+        try:
+            import fitz  # starsze wersje PyMuPDF
+        except ImportError:
+            fitz = None
+    if fitz is None:
+        st.error(
+            "📄 Obsługa plików PDF wymaga biblioteki **PyMuPDF**, która nie jest zainstalowana. "
+            "Dopisz `PyMuPDF` do pliku `requirements.txt` aplikacji i wdróż ponownie - "
+            "wtedy wgrywanie projektów PDF zadziała."
+        )
+        return None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if doc.page_count == 0:
+            return None
+        strona = doc.load_page(0)
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
+        pix = strona.get_pixmap(matrix=mat, alpha=False)
+        return pix.tobytes("png")
+    except Exception as e:
+        st.error(f"Nie udało się odczytać pliku PDF: {e}")
+        return None
+
+
+def wczytaj_upload_jako_obraz(uploaded_file):
+    """
+    Zwraca (bytes, mime) z wgranego pliku - jeśli to PDF, konwertuje 1. stronę
+    na PNG; w przeciwnym razie zwraca oryginalne bajty obrazu bez zmian.
+    """
+    if uploaded_file is None:
+        return None
+    dane = uploaded_file.getvalue()
+    typ = (uploaded_file.type or "").lower()
+    if typ == "application/pdf" or uploaded_file.name.lower().endswith(".pdf"):
+        png = _pdf_pierwsza_strona_do_png(dane)
+        return (png, "image/png") if png else None
+    return (dane, typ or "image/jpeg")
+
+
+def wczytaj_wiele_uploadow_jako_obrazy(uploaded_files):
+    """Jak wyżej, dla listy plików (multi-upload) - pomija te, których nie da się odczytać."""
+    wynik = []
+    for uf in (uploaded_files or []):
+        para = wczytaj_upload_jako_obraz(uf)
+        if para and para[0]:
+            wynik.append(para)
+    return wynik
+
+
+def oszacuj_m2_tekstowo(pojazd_opis, zakres_b2b):
+    """
+    (v3.4) Szacuje m² folii dla pojazdu spoza cennika (typ "Inny") na podstawie
+    samego opisu tekstowego - bez projektu graficznego. Uwzględnia szerokość
+    rolek 1,37/1,52 m i typowy zapas produkcyjny.
+    """
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        return None
+    prompt = (
+        "Jesteś ekspertem produkcji oklejeń reklamowych pojazdów. Oszacuj ile m² folii "
+        f"z drukiem potrzeba, aby oklejenie objęło {zakres_b2b} powierzchni pojazdu: "
+        f"„{pojazd_opis}\".\n\n"
+        "ZASADY:\n"
+        "- Uwzględnij typowe gabaryty takiego pojazdu (np. ciężarówka, autobus, przyczepa - "
+        "oszacuj realną powierzchnię boczną, przód, tył).\n"
+        "- Druk odbywa się z rolek o szerokości 1,37 m lub 1,52 m - dolicz zapas na szerokość "
+        "rolki, spady i dopasowanie brytów (zwykle +10-15%).\n"
+        "- Wynik zaokrąglij do 0,5 m².\n\n"
+        "Odpowiedz WYŁĄCZNIE czystym JSON (bez markdownu): "
+        '{"m2": <liczba>, "komentarz": "<1-2 zdania uzasadnienia po polsku>"}'
+    )
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        payload = {"contents": [{"parts": [{"text": prompt}]}],
+                   "generationConfig": {"temperature": 0.2, "maxOutputTokens": 300,
+                                        "thinkingConfig": {"thinkingBudget": 0}}}
+        r = requests.post(url, headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                          json=payload, timeout=30)
+        if not r.ok:
+            return None
+        tekst = "".join(p.get("text", "") for p in
+                        (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", []))
+        tekst = tekst.strip().replace("```json", "").replace("```", "").strip()
+        dane = json.loads(tekst)
+        return {"m2": float(dane.get("m2", 0)), "komentarz": str(dane.get("komentarz", ""))}
+    except Exception:
+        return None
+
+
 # --- APLIKACJA ---
 st.set_page_config(
     page_title="IT'S WRAP - Generator Ofert",
@@ -2566,12 +2668,18 @@ with st.sidebar:
         # ==========================================================
         st.markdown("---")
         st.markdown("### Pojazd")
-        _typy_b2b = list(METRAZ_B2B.keys())
+        _typy_b2b = list(METRAZ_B2B.keys()) + ["Inny (wpisz nazwę)"]
         typ_pojazdu = st.selectbox("Typ pojazdu", _typy_b2b,
                                    index=_eidx(_typy_b2b, ED.get('typ_pojazdu')))
-        pojazd_opis = st.text_input("Marka i model (do oferty)",
-                                    value=ED.get('pojazd_opis', ''),
-                                    placeholder="np. Mercedes Sprinter")
+        _typ_inny = (typ_pojazdu == "Inny (wpisz nazwę)")
+        pojazd_opis = st.text_input(
+            "Marka i model (do oferty)" + (" - WYMAGANE dla typu „Inny\"" if _typ_inny else ""),
+            value=ED.get('pojazd_opis', ''),
+            placeholder="np. Mercedes Sprinter" if not _typ_inny
+                        else "np. Autobus miejski Solaris Urbino 12, Naczepa ciężarowa 13,6m, MAN TGX...")
+        if _typ_inny:
+            st.caption("💡 AI wykorzysta ten opis do wygenerowania wizualizacji i oszacowania metrażu "
+                       "(przycisk „Oszacuj m² dla tego pojazdu” niżej).")
         zakres_b2b = st.selectbox("Zakres oklejania (bez dachu)", ZAKRESY_B2B,
                                   index=_eidx(ZAKRESY_B2B, ED.get('zakres_b2b')))
         bus_dlugi = bus_wysoki = dach_b2b = False
@@ -2582,6 +2690,16 @@ with st.sidebar:
                                      value=bool(ED.get('bus_wysoki', False)))
             dach_b2b = st.checkbox(f"Oklejanie dachu  (+{DODATKI_M2_B2B.get('Dach', 8):g} m²)",
                                    value=bool(ED.get('dach_b2b', False)))
+
+        if _typ_inny and pojazd_opis.strip():
+            if st.button("🤖 OSZACUJ m² DLA TEGO POJAZDU (na podstawie opisu)",
+                         disabled=not zalogowany, key="b2b_estymuj_tekst"):
+                with st.spinner("AI szacuje metraż dla nietypowego pojazdu..."):
+                    _wynik = oszacuj_m2_tekstowo(pojazd_opis.strip(), zakres_b2b)
+                if _wynik and _wynik.get('m2'):
+                    st.session_state['b2b_sugestia_m2'] = _wynik
+                else:
+                    st.warning("Nie udało się oszacować metrażu - wpisz m² ręcznie.")
 
         st.markdown("---")
         st.markdown("### Okładka oferty")
@@ -2597,64 +2715,70 @@ with st.sidebar:
         _projekt_do_estymacji = None  # (bytes, mime) - do przycisku "Oszacuj m²"
 
         if wariant_okladki.startswith("1"):
-            up_wiz = st.file_uploader("Wgraj wizualizację od klienta",
-                                      type=['png', 'jpg', 'jpeg', 'webp'], key="b2b_up_w1")
+            up_wiz = st.file_uploader("Wgraj wizualizację od klienta (obraz lub PDF)",
+                                      type=['png', 'jpg', 'jpeg', 'webp', 'pdf'], key="b2b_up_w1")
             dopracuj_ai = st.checkbox("🪄 Dopracuj kadr przez AI (tło/kompozycja)", value=False)
             if up_wiz is not None:
-                _bajty = up_wiz.getvalue()
-                _projekt_do_estymacji = (_bajty, up_wiz.type or "image/jpeg")
-                if st.button("📥 UŻYJ JAKO OKŁADKĘ", disabled=not zalogowany, key="b2b_uzyj_w1"):
-                    if dopracuj_ai:
-                        with st.spinner("AI dopracowuje kadr okładki..."):
-                            _img = _ai_obraz_z_promptu(
-                                "This is a client-approved vehicle wrap visualization. "
-                                "Recompose it into a clean, professional offer cover shot: adjust framing "
-                                "and background if needed, keep the vehicle, its wrap design, all logos and "
-                                "all text ABSOLUTELY UNCHANGED. Photorealistic.",
-                                [(_bajty, up_wiz.type or "image/jpeg")])
-                        if _img:
-                            st.session_state['ai_img'] = _img
-                            st.success("Okładka gotowa ✅")
-                    else:
-                        try:
-                            st.session_state['ai_img'] = _crop_to_target_ratio(_bajty)
-                            st.success("Okładka gotowa ✅ (przycięta do proporcji oferty)")
-                        except Exception as e:
-                            st.error(f"Nie udało się przetworzyć pliku: {e}")
+                _para = wczytaj_upload_jako_obraz(up_wiz)
+                if _para:
+                    _bajty, _mime = _para
+                    _projekt_do_estymacji = (_bajty, _mime)
+                    if st.button("📥 UŻYJ JAKO OKŁADKĘ", disabled=not zalogowany, key="b2b_uzyj_w1"):
+                        if dopracuj_ai:
+                            with st.spinner("AI dopracowuje kadr okładki..."):
+                                _img = _ai_obraz_z_promptu(
+                                    "This is a client-approved vehicle wrap visualization. "
+                                    "Recompose it into a clean, professional offer cover shot: adjust framing "
+                                    "and background if needed, keep the vehicle, its wrap design, all logos and "
+                                    "all text ABSOLUTELY UNCHANGED. Photorealistic.",
+                                    [(_bajty, _mime)])
+                            if _img:
+                                st.session_state['ai_img'] = _img
+                                st.success("Okładka gotowa ✅")
+                        else:
+                            try:
+                                st.session_state['ai_img'] = _crop_to_target_ratio(_bajty)
+                                st.success("Okładka gotowa ✅ (przycięta do proporcji oferty)")
+                            except Exception as e:
+                                st.error(f"Nie udało się przetworzyć pliku: {e}")
 
         elif wariant_okladki.startswith("2"):
-            up_siatka = st.file_uploader("Wgraj projekt na płasko (siatkę pojazdu)",
-                                         type=['png', 'jpg', 'jpeg', 'webp'], key="b2b_up_w2")
+            up_siatka = st.file_uploader("Wgraj projekt na płasko (siatkę pojazdu, obraz lub PDF)",
+                                         type=['png', 'jpg', 'jpeg', 'webp', 'pdf'], key="b2b_up_w2")
             if up_siatka is not None:
-                _bajty = up_siatka.getvalue()
-                _projekt_do_estymacji = (_bajty, up_siatka.type or "image/jpeg")
-                if st.button("🪄 GENERUJ WIZUALIZACJĘ 3D Z SIATKI", disabled=not zalogowany, key="b2b_gen_w2"):
-                    with st.spinner("AI przerabia siatkę na wizualizację 3D..."):
-                        _img = _ai_obraz_z_promptu(
-                            "Attached is a FLAT vehicle wrap design template (vehicle net / siatka) showing "
-                            "the sides, front and rear of the vehicle laid out flat. "
-                            f"Render a photorealistic 3D {pojazd_opis or typ_pojazdu} with this EXACT design "
-                            "applied to the corresponding body panels. Keep every graphic element, color, "
-                            "logo and text from the template exactly as designed and correctly placed. "
-                            f"Scene: {SCENE_DESCRIPTION}",
-                            [(_bajty, up_siatka.type or "image/jpeg")])
-                    if _img:
-                        st.session_state['ai_img'] = _img
-                        st.success("Wizualizacja 3D gotowa ✅")
+                _para = wczytaj_upload_jako_obraz(up_siatka)
+                if _para:
+                    _bajty, _mime = _para
+                    _projekt_do_estymacji = (_bajty, _mime)
+                    _nazwa_poj_ai = pojazd_opis.strip() if (_typ_inny and pojazd_opis.strip()) else (pojazd_opis or typ_pojazdu)
+                    if st.button("🪄 GENERUJ WIZUALIZACJĘ 3D Z SIATKI", disabled=not zalogowany, key="b2b_gen_w2"):
+                        with st.spinner("AI przerabia siatkę na wizualizację 3D..."):
+                            _img = _ai_obraz_z_promptu(
+                                "Attached is a FLAT vehicle wrap design template (vehicle net / siatka) showing "
+                                "the sides, front and rear of the vehicle laid out flat. "
+                                f"Render a photorealistic 3D {_nazwa_poj_ai} with this EXACT design "
+                                "applied to the corresponding body panels. Keep every graphic element, color, "
+                                "logo and text from the template exactly as designed and correctly placed. "
+                                f"Scene: {SCENE_DESCRIPTION}",
+                                [(_bajty, _mime)])
+                        if _img:
+                            st.session_state['ai_img'] = _img
+                            st.success("Wizualizacja 3D gotowa ✅")
 
         elif wariant_okladki.startswith("3"):
-            up_mat = st.file_uploader("Materiały klienta (logo, brandbook, zdjęcia - można kilka)",
-                                      type=['png', 'jpg', 'jpeg', 'webp'],
+            up_mat = st.file_uploader("Materiały klienta (logo, brandbook, zdjęcia - obrazy lub PDF, można kilka)",
+                                      type=['png', 'jpg', 'jpeg', 'webp', 'pdf'],
                                       accept_multiple_files=True, key="b2b_up_w3")
             wytyczne_koncept = st.text_input("Wytyczne (kolory firmowe, hasło, styl)",
                                              placeholder="np. granat + limonka, dynamiczne pasy, hasło PROTECT.SECURE.")
             if st.button("🪄 GENERUJ KONCEPT OKLEJENIA", disabled=not zalogowany, key="b2b_gen_w3"):
-                _obrazy = [(u.getvalue(), u.type or "image/png") for u in (up_mat or [])]
+                _obrazy = wczytaj_wiele_uploadow_jako_obrazy(up_mat)
+                _nazwa_poj_ai = pojazd_opis.strip() if (_typ_inny and pojazd_opis.strip()) else (pojazd_opis or typ_pojazdu)
                 with st.spinner("AI projektuje koncepcję oklejenia..."):
                     _img = _ai_obraz_z_promptu(
                         "You are a vehicle wrap designer. Using the attached client brand materials "
                         "(logo / brand imagery), design an attractive commercial advertising wrap concept for a "
-                        f"{pojazd_opis or typ_pojazdu}. Place the client's logo prominently and reproduce it as "
+                        f"{_nazwa_poj_ai}. Place the client's logo prominently and reproduce it as "
                         "faithfully as possible. "
                         + (f"Design guidelines from the client: {wytyczne_koncept}. " if wytyczne_koncept.strip() else "")
                         + f"Render as photorealistic vehicle photo. Scene: {SCENE_DESCRIPTION}",
@@ -3069,7 +3193,9 @@ with tab_kreator:
         # (v3.0) GENEROWANIE OFERTY B2B
         # ==========================================================
         if st.button("🔥 GENERUJ PEŁNĄ OFERTĘ PDF", disabled=not zalogowany, key="b2b_generuj"):
-            if not zestaw_wybrany:
+            if typ_pojazdu == "Inny (wpisz nazwę)" and not pojazd_opis.strip():
+                st.error("Wybrałeś typ pojazdu „Inny\" - uzupełnij pole „Marka i model\" w panelu bocznym.")
+            elif not zestaw_wybrany:
                 st.error("Brak zestawu kart - wgraj podfoldery z kartami do folderu B2B na Dysku.")
             elif ('ai_img' not in st.session_state) and not wariant_okladki.startswith("4"):
                 st.error("Przygotuj wizualizację w panelu bocznym albo wybierz wariant "
