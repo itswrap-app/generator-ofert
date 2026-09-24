@@ -1349,11 +1349,44 @@ def pobierz_zestawy_b2b():
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def pobierz_cennik():
+    """
+    (v3.7) Odporne czytanie cennika: wcześniej pd.DataFrame(dane[1:], columns=naglowki)
+    potrafiło wywalić WYJĄTEK DLA CAŁEGO CENNIKA (nie tylko jednego wiersza), jeśli
+    - jakikolwiek wiersz w arkuszu miał inną liczbę kolumn niż nagłówek, albo
+    - w nagłówku pojawiła się zduplikowana/pusta nazwa kolumny (np. po ręcznym
+      wklejeniu/edycji arkusza) - wtedy df_cennik['Kategoria'] itp. zwracało coś
+      innego niż pojedynczą kolumnę i WSZYSTKIE wyszukiwania cen zaczynały zwracać
+      "nie znaleziono ceny", nie tylko dla nowo dodanej pozycji.
+    Teraz: nagłówki są deduplikowane, a każdy wiersz danych jest dopełniany/przycinany
+    do długości nagłówka zamiast wywalać cały cennik błędem.
+    """
     _, gs_client = get_google_clients()
     sheet_cennik = gs_client.open_by_url(LINK_DO_ARKUSZA).worksheet("Cennik usług")
     dane = sheet_cennik.get_all_values()
-    naglowki = [c.replace('\n', ' ').replace('\r', '').strip() for c in dane[0]]
-    return pd.DataFrame(dane[1:], columns=naglowki)
+    if not dane:
+        return pd.DataFrame()
+
+    naglowki_raw = [c.replace('\n', ' ').replace('\r', '').strip() for c in dane[0]]
+    naglowki, licznik = [], {}
+    for h in naglowki_raw:
+        h = h if h else "Kolumna"
+        if h in licznik:
+            licznik[h] += 1
+            naglowki.append(f"{h}_{licznik[h]}")
+        else:
+            licznik[h] = 0
+            naglowki.append(h)
+
+    wiersze_ok = []
+    for w in dane[1:]:
+        w = list(w)
+        if len(w) < len(naglowki):
+            w = w + [""] * (len(naglowki) - len(w))
+        elif len(w) > len(naglowki):
+            w = w[:len(naglowki)]
+        wiersze_ok.append(w)
+
+    return pd.DataFrame(wiersze_ok, columns=naglowki)
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -3554,6 +3587,7 @@ with tab_kreator:
             uslugi_kat = [u for u in df_cennik[df_cennik['Kategoria'] == kategoria]['Usługa'].unique() if str(u).strip() != ""]
             pakiet = st.selectbox("Usługa", uslugi_kat, index=_eidx(uslugi_kat, ED.get('pakiet')))
         
+            _blad_cennika = None
             try:
                 wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
                 if not wiersz_ceny.empty:
@@ -3563,12 +3597,18 @@ with tab_kreator:
                     cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
                 else:
                     cena_domyslna = 0.0
-            except:
+            except Exception as _e:
                 cena_domyslna = 0.0
+                _blad_cennika = str(_e)
         
             # (v2) Cicha cena 0.0 bywa przeoczana - dajemy delikatne ostrzeżenie
             if cena_domyslna == 0.0:
                 st.caption("⚠️ Nie znaleziono ceny w cenniku dla tej kombinacji usługi i segmentu - wpisz cenę ręcznie poniżej.")
+                if _blad_cennika:
+                    # (v3.7) Jeśli to nie zwykły brak wiersza tylko błąd struktury cennika
+                    # (np. zduplikowana kolumna w arkuszu) - pokazujemy dokładny powód,
+                    # żeby dało się to od razu zdiagnozować zamiast zgadywać.
+                    st.caption(f"ℹ️ Techniczny powód: {_blad_cennika}")
 
             st.markdown("---")
             st.write("💰 **Kalkulacja cenowa**")
