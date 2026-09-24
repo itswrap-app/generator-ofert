@@ -406,6 +406,25 @@ SCENE_DESCRIPTION = (
 
 
 # --- FUNKCJE POMOCNICZE ---
+def _znajdz_kolumne(df, *fragmenty):
+    """
+    (v3.9) Odporne wyszukanie kolumny w DataFrame po fragmentach nazwy
+    (case-insensitive, ignorując spacje/polskie znaki drobne różnice), zamiast
+    sztywnego df['Dokładna Nazwa Kolumny'] - żeby literówka/inne formatowanie
+    nagłówka w arkuszu (np. "Cena sprzedaży netto (PLN)" zamiast
+    "Cena sprzedaży netto PLN") nie wywalała całego wyszukiwania ceny błędem
+    KeyError. Zwraca nazwę pierwszej pasującej kolumny albo None.
+    """
+    def _norm(s):
+        return re.sub(r'[^a-ząćęłńóśźż0-9]', '', str(s).lower())
+    fragmenty_norm = [_norm(f) for f in fragmenty]
+    for kol in df.columns:
+        kol_norm = _norm(kol)
+        if all(f in kol_norm for f in fragmenty_norm):
+            return kol
+    return None
+
+
 def _czysta_nazwa_folii(folia):
     """
     Wyciąga "ludzką" nazwę folii bez kodu w nawiasie.
@@ -1366,7 +1385,13 @@ def pobierz_cennik():
     if not dane:
         return pd.DataFrame()
 
-    naglowki_raw = [c.replace('\n', ' ').replace('\r', '').strip() for c in dane[0]]
+    # (v3.9) Samo replace('\n',' ') nie wystarczało - komórka nagłówka z podwójnym
+    # enterem ("Cena sprzedaży\n\nnetto PLN") dawała podwójną spację, która NIE
+    # jest równa "Cena sprzedaży netto PLN" użytemu w kodzie -> KeyError tylko dla
+    # tej jednej kolumny (reszta: Kategoria/Usługa/Segment działała, bo to
+    # krótkie, jednowyrazowe nagłówki bez tego problemu). Teraz każda wielokrotna
+    # spacja/tabulator/NBSP jest zwijana do pojedynczej spacji.
+    naglowki_raw = [re.sub(r'\s+', ' ', c.replace('\xa0', ' ')).strip() for c in dane[0]]
     naglowki, licznik = [], {}
     for h in naglowki_raw:
         h = h if h else "Kolumna"
@@ -3591,7 +3616,14 @@ with tab_kreator:
             try:
                 wiersz_ceny = df_cennik[(df_cennik['Kategoria'] == kategoria) & (df_cennik['Usługa'] == pakiet) & (df_cennik['Segment'] == segment_final)]
                 if not wiersz_ceny.empty:
-                    cena_str = str(wiersz_ceny['Cena sprzedaży netto PLN'].values[0])
+                    # (v3.9) Najpierw dokładna nazwa kolumny (szybka ścieżka), a jeśli
+                    # arkusz ma ją inaczej sformatowaną - szukamy po fragmentach nazwy
+                    # zamiast wywalać KeyError dla całego cennika.
+                    _kol_cena = 'Cena sprzedaży netto PLN' if 'Cena sprzedaży netto PLN' in df_cennik.columns \
+                        else _znajdz_kolumne(df_cennik, 'cena', 'sprzeda', 'netto')
+                    if not _kol_cena:
+                        raise KeyError("Nie znaleziono kolumny z ceną sprzedaży netto w arkuszu 'Cennik usług'")
+                    cena_str = str(wiersz_ceny[_kol_cena].values[0])
                     cena_str = cena_str.replace(' ', '').replace('\xa0', '')
                     if ',' in cena_str: cena_str = cena_str.replace('.', '').replace(',', '.')
                     cena_domyslna = float(re.sub(r'[^\d.]', '', cena_str))
