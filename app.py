@@ -107,6 +107,13 @@ FOIL_GROUPS = {
             "Miami Blue (Połysk)"
         ]
     },
+    # (v3.5) Nowa folia ochronna PPF: 3M™ Series 100 - dodana 2025-12-09
+    # (karta produktowa: 20251209_PPF_3M_100.pptx, folder B2C na Dysku).
+    "3M (Folie Ochronne PPF)": {
+        "Bezbarwne (Twój obecny kolor)": [
+            "3M 100 (Ochrona Premium)"
+        ]
+    },
     "3M 2080 Series": {
         "Wysoki Połysk (High Gloss)": [
             "Czarny Wysoki Połysk (HG12) - High Gloss Black",
@@ -366,6 +373,7 @@ FOIL_GROUPS = {
 # ==========================================================================
 KATEGORIE_DLA_PRODUCENTA = {
     "XPEL (Folie Ochronne PPF)": ["PPF"],
+    "3M (Folie Ochronne PPF)": ["PPF"],
     "3M 2080 Series": ["Zmiana koloru"],
     "Avery Dennison SW900": ["Zmiana koloru"],
     "Arlon": ["Zmiana koloru"],
@@ -1699,6 +1707,68 @@ def zapisz_metraz_b2b(typ, pozycja, m2):
     ws.append_row([typ.strip(), pozycja.strip(), str(m2)])
     pobierz_cennik_b2b.clear()
     return "dodano"
+
+
+# ==========================================================================
+# (v3.5) CENNIK USŁUG (B2C) - dodawanie nowych pozycji z poziomu aplikacji
+# Zapisuje bezpośrednio do zakładki "Cennik usług" (ta sama, z której czyta
+# pobierz_cennik()), w KOLEJNOŚCI NAGŁÓWKÓW JAKĄ MA ARKUSZ - żeby zadziałało
+# niezależnie od tego, czy w arkuszu jest 15 czy 23 kolumny, i żeby nie
+# nadpisać żadnej istniejącej kolumny błędnym przesunięciem.
+# Kolumny liczone automatycznie (Koszt materiału/robocizny/całkowity, Marża
+# PLN/%) są wyliczane w Pythonie identycznie jak w arkuszu, o ile te kolumny
+# tam istnieją - jeśli jakiejś kolumny nie ma, po prostu ją pomijamy.
+# ==========================================================================
+def dodaj_pozycje_cennika(kategoria, usluga, segment, rodzaj_folii,
+                          cena_mat, norma_m2, roboczogodziny, stawka_h,
+                          cena_sprzedazy, uwagi=""):
+    """Dopisuje jeden wiersz do zakładki 'Cennik usług', dopasowując się do
+    aktualnych nagłówków arkusza (dowolna kolejność/ilość kolumn)."""
+    _, gs_client = get_google_clients()
+    ss = gs_client.open_by_url(LINK_DO_ARKUSZA)
+    ws = ss.worksheet("Cennik usług")
+    naglowki_raw = ws.row_values(1)
+    naglowki = [h.replace('\n', ' ').replace('\r', '').strip() for h in naglowki_raw]
+
+    koszt_mat = float(cena_mat) * float(norma_m2)
+    koszt_rob = float(roboczogodziny) * float(stawka_h)
+    koszt_calk = koszt_mat + koszt_rob
+    marza_pln = float(cena_sprzedazy) - koszt_calk
+    marza_proc = (marza_pln / float(cena_sprzedazy)) if float(cena_sprzedazy) else 0.0
+
+    # Mapa: nazwa nagłówka (znormalizowana, case-insensitive, bez znaków specjalnych)
+    # -> wartość do wpisania. Dzięki temu kolejność kolumn w arkuszu nie ma znaczenia.
+    def _norm(s):
+        return re.sub(r'[^a-ząćęłńóśźż0-9]', '', s.lower())
+
+    wartosci_wg_klucza = {
+        "kategoria": kategoria,
+        "usluga": usluga,
+        "segment": segment,
+        "rodzajfoliimaterialu": rodzaj_folii,
+        "cenamatplnm2": cena_mat,
+        "normamaterialum2": norma_m2,
+        "roboczogodzinyh": roboczogodziny,
+        "roboczogodzinynaprzygotowanie": roboczogodziny,  # starszy wariant nagłówka
+        "stawkaplnh": stawka_h,
+        "stawkamyjniaplnh": stawka_h,
+        "kosztmaterialu": koszt_mat,
+        "kosztrobocizny": koszt_rob,
+        "kosztcalkowity": koszt_calk,
+        "cenasprzedazynettopln": cena_sprzedazy,
+        "marzapln": marza_pln,
+        "marza": marza_proc,
+        "uwagi": uwagi,
+    }
+
+    wiersz = []
+    for h in naglowki:
+        klucz = _norm(h)
+        wiersz.append(wartosci_wg_klucza.get(klucz, ""))
+
+    ws.append_row(wiersz, value_input_option="USER_ENTERED")
+    pobierz_cennik.clear()
+    return True
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -3666,7 +3736,11 @@ with tab_kreator:
                                       znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
                         else:
                             produkt = znajdz_szablon('zmiana koloru', dodatkowe_filtry=['pwf'])
-                    # Priorytet 3: XPEL - rozróżnienie po linii produktowej
+                    # Priorytet 3: 3M PPF (Series 100) - nowa folia ochronna, dodana 2025-12-09
+                    elif f_brand == "3M (Folie Ochronne PPF)":
+                        produkt = znajdz_szablon('ppf', dodatkowe_filtry=['3m']) or \
+                                  znajdz_szablon('3m_100') or znajdz_szablon('series 100')
+                    # Priorytet 4: XPEL - rozróżnienie po linii produktowej
                     elif f_brand == "XPEL (Folie Ochronne PPF)":
                         if "Ultimate" in f_color:
                             produkt = znajdz_szablon('xpelultimate') or znajdz_szablon('ultimate')
@@ -4088,6 +4162,57 @@ with tab_ustawienia:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Nie udało się dodać koloru: {e}")
+
+    st.markdown("---")
+
+    # ==========================================================
+    # (v3.5) CENNIK USŁUG (B2C) - dodawanie nowych pozycji z poziomu aplikacji
+    # (np. nowej folii PPF typu "3M 100") bez wchodzenia do arkusza.
+    # ==========================================================
+    st.markdown("### 💰 Cennik usług (B2C)")
+    st.caption(
+        "Tutaj dodajesz nową pozycję do cennika B2C (np. nową folię PPF albo nowy pakiet), "
+        "bez wchodzenia do arkusza Google. Pozycję dodajesz **osobno dla każdego segmentu** "
+        "(A, B, C, D, E, J) - tak jak w arkuszu."
+    )
+    _segmenty_cennika = sorted([s for s in df_cennik['Segment'].dropna().unique() if str(s).strip()]) \
+        if 'Segment' in df_cennik.columns and not df_cennik.empty else ["Segment A", "Segment B", "Segment C", "Segment D", "Segment E", "Segment J"]
+    _kat_istniejace = sorted([k for k in df_cennik['Kategoria'].dropna().unique() if str(k).strip()]) \
+        if 'Kategoria' in df_cennik.columns and not df_cennik.empty else []
+
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        _cn_kat_opcje = _kat_istniejace + ["➕ Nowa kategoria..."]
+        _cn_kat_sel = st.selectbox("Kategoria", _cn_kat_opcje, key="ust_cn_kat")
+        _cn_kat = st.text_input("Nazwa nowej kategorii", key="ust_cn_kat_nowa") if _cn_kat_sel == "➕ Nowa kategoria..." else _cn_kat_sel
+        _cn_usluga = st.text_input("Nazwa usługi (np. 'PPF Full Body 3M 100')", key="ust_cn_usluga")
+        _cn_segment = st.selectbox("Segment", _segmenty_cennika, key="ust_cn_segment")
+        _cn_rodzaj = st.text_input("Rodzaj folii / materiału (np. '3M 100')", key="ust_cn_rodzaj")
+        _cn_uwagi = st.text_input("Uwagi (opcjonalnie)", key="ust_cn_uwagi")
+    with col_c2:
+        _cn_cena_mat = st.number_input("Cena materiału (zł/m²)", min_value=0.0, step=5.0, key="ust_cn_cena_mat")
+        _cn_norma = st.number_input("Norma materiału (m²)", min_value=0.0, step=0.5, key="ust_cn_norma")
+        _cn_rbg = st.number_input("Roboczogodziny (h)", min_value=0.0, step=0.5, key="ust_cn_rbg")
+        _cn_stawka = st.number_input("Stawka (zł/h)", min_value=0.0, step=5.0, value=50.0, key="ust_cn_stawka")
+        _cn_cena_sprzedazy = st.number_input("Cena sprzedaży netto dla klienta (PLN)", min_value=0.0, step=100.0, key="ust_cn_cena_sprzedazy")
+
+    _cn_koszt_calk = (_cn_cena_mat * _cn_norma) + (_cn_rbg * _cn_stawka)
+    _cn_marza = _cn_cena_sprzedazy - _cn_koszt_calk
+    st.caption(f"Podgląd: koszt całkowity ≈ {_cn_koszt_calk:,.0f} zł · marża ≈ {_cn_marza:,.0f} zł "
+              f"({(_cn_marza / _cn_cena_sprzedazy * 100) if _cn_cena_sprzedazy else 0:.1f}%)".replace(',', ' '))
+
+    if st.button("💾 DODAJ POZYCJĘ DO CENNIKA", disabled=not zalogowany, key="ust_cn_dodaj"):
+        if not _cn_kat.strip() or not _cn_usluga.strip() or not _cn_rodzaj.strip() or _cn_cena_sprzedazy <= 0:
+            st.error("Uzupełnij co najmniej: kategorię, nazwę usługi, rodzaj folii/materiału i cenę sprzedaży (> 0).")
+        else:
+            try:
+                dodaj_pozycje_cennika(_cn_kat.strip(), _cn_usluga.strip(), _cn_segment, _cn_rodzaj.strip(),
+                                      _cn_cena_mat, _cn_norma, _cn_rbg, _cn_stawka,
+                                      _cn_cena_sprzedazy, _cn_uwagi.strip())
+                st.success(f"✅ Dodano do cennika: {_cn_kat.strip()} → {_cn_usluga.strip()} → {_cn_segment}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Nie udało się dodać pozycji do cennika: {e}")
 
     st.markdown("---")
 
