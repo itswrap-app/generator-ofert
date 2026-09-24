@@ -111,7 +111,7 @@ FOIL_GROUPS = {
     # (karta produktowa: 20251209_PPF_3M_100.pptx, folder B2C na Dysku).
     "3M (Folie Ochronne PPF)": {
         "Bezbarwne (Twój obecny kolor)": [
-            "3M 100 (Ochrona Premium)"
+            "Folia PPF 3M™ Series 100"
         ]
     },
     "3M 2080 Series": {
