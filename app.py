@@ -3534,6 +3534,7 @@ with tab_kreator:
                         "auto": pojazd_opis or typ_pojazdu,
                         "pakiet": _usluga_rej,
                         "cena": cena_koncowa,
+                        "dane_oferty": dane_oferty_json,
                         "pipedrive_deal": None,
                         "pd_person_id": (_pd_osoba or {}).get("id", ""),
                         "pd_org_id": (_pd_org or {}).get("id", ""),
@@ -3951,6 +3952,7 @@ with tab_kreator:
                         "auto": f"{final_brand} {final_model}",
                         "pakiet": pakiet,
                         "cena": cena_koncowa,
+                        "dane_oferty": dane_oferty_json,
                         "pipedrive_deal": None,
                         "pd_person_id": (_pd_osoba or {}).get("id", ""),
                     }
@@ -4037,6 +4039,25 @@ with tab_kreator:
                                 st.warning(f"Szansa #{_deal_id} utworzona, ale załączenie PDF nie powiodło się.")
                         else:
                             st.warning("Nie udało się utworzyć szansy sprzedaży - sprawdź token API.")
+
+
+        # [TEST] Opcjonalny lokalny eksport HTML. Brak logowania, publikacji i zmian w PDF.
+        # Umieszczone na samym dole sekcji wygenerowanej oferty.
+        try:
+            from itswrap_html_export_dev import generate_offer_html
+            _html_bytes_test = generate_offer_html(
+                _oo, "ITS_WRAP_LOGOTYP_POZIOM_CLAIM_COLOR.png"
+            )
+            st.download_button(
+                "HTML (TEST)",
+                data=_html_bytes_test,
+                file_name=f"itswrap_test_{re.sub(r'[^a-zA-Z0-9_-]', '_', str(_oo['nr_o']))}.html",
+                mime="text/html",
+                key="itswrap_html_test_download",
+                help="Pobiera testową ofertę HTML na komputer. Nie publikuje jej ani nie wysyła."
+            )
+        except Exception:
+            st.caption("Eksport HTML (TEST) jest chwilowo niedostępny.")
 
 with tab_rejestr:
     st.markdown("""
@@ -4435,3 +4456,4 @@ st.markdown("""
     <span style="opacity: 0.6; letter-spacing: 0.03em;">www.itswrap.pl · Professional Car Wrapping &amp; PPF · Certyfikowana jakość 3M</span>
 </div>
 """, unsafe_allow_html=True)
+
