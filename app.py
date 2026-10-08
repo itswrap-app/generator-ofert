@@ -3972,6 +3972,20 @@ with tab_kreator:
                            file_name=_oo['nazwa_pliku'],
                            key="dl_ostatnia_oferta")
 
+        # DEV: tylko opcjonalny eksport HTML. Nie zmienia kalkulacji, PDF ani Pipedrive.
+        try:
+            from html_offer_export import export_offer_html
+            st.download_button(
+                "🌐 HTML (TEST)",
+                data=export_offer_html(_oo),
+                file_name="ITSWRAP_" + re.sub(r"[^a-zA-Z0-9_-]", "_", str(_oo.get("nr_o", "oferta"))) + ".html",
+                mime="text/html",
+                key="dl_ostatnia_oferta_html_test",
+                help="Eksperymentalny plik HTML — tylko pobieranie, bez publikowania.",
+            )
+        except Exception as html_export_error:
+            st.caption(f"HTML TEST chwilowo niedostępny: {html_export_error}")
+
         st.markdown("##### 📤 Pipedrive - szansa sprzedaży")
         if _oo.get('pipedrive_deal'):
             st.success(f"✅ Ta oferta jest już w Pipedrive - szansa #{_oo['pipedrive_deal']} z załączonym PDF.")
