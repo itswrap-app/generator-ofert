@@ -3535,6 +3535,12 @@ with tab_kreator:
                         "pakiet": _usluga_rej,
                         "cena": cena_koncowa,
                         "dane_oferty": dane_oferty_json,
+                        "_html_snapshot": {
+                            "visual": st.session_state.get('ai_img') if _mam_wizualizacje else None,
+                            "fields": dict(replacements),
+                            "catalog_net": cena_za_pojazd * liczba_pojazdow,
+                            "unit_net": cena_za_pojazd,
+                        },
                         "pipedrive_deal": None,
                         "pd_person_id": (_pd_osoba or {}).get("id", ""),
                         "pd_org_id": (_pd_org or {}).get("id", ""),
@@ -3953,6 +3959,11 @@ with tab_kreator:
                         "pakiet": pakiet,
                         "cena": cena_koncowa,
                         "dane_oferty": dane_oferty_json,
+                        "_html_snapshot": {
+                            "visual": st.session_state.get('ai_img'),
+                            "fields": dict(replacements),
+                            "catalog_net": cena_manual,
+                        },
                         "pipedrive_deal": None,
                         "pd_person_id": (_pd_osoba or {}).get("id", ""),
                     }
@@ -4041,23 +4052,14 @@ with tab_kreator:
                             st.warning("Nie udało się utworzyć szansy sprzedaży - sprawdź token API.")
 
 
-        # [TEST] Opcjonalny lokalny eksport HTML. Brak logowania, publikacji i zmian w PDF.
-        # Umieszczone na samym dole sekcji wygenerowanej oferty.
+        # Optional HTML publication. Its failures do not interrupt PDF or CRM.
         try:
-            from itswrap_html_export_dev import generate_offer_html
-            _html_bytes_test = generate_offer_html(
-                _oo, "ITS_WRAP_LOGOTYP_POZIOM_CLAIM_COLOR.png"
-            )
-            st.download_button(
-                "HTML (TEST)",
-                data=_html_bytes_test,
-                file_name=f"itswrap_test_{re.sub(r'[^a-zA-Z0-9_-]', '_', str(_oo['nr_o']))}.html",
-                mime="text/html",
-                key="itswrap_html_test_download",
-                help="Pobiera testową ofertę HTML na komputer. Nie publikuje jej ani nie wysyła."
-            )
-        except Exception:
-            st.caption("Eksport HTML (TEST) jest chwilowo niedostępny.")
+            from itswrap_offer_online import render_online_offer
+            render_online_offer(st, _oo)
+        except Exception as _html_error:
+            st.caption("Oferta online jest chwilowo niedostępna. PDF i pozostałe funkcje działają niezależnie.")
+            with st.expander("Szczegóły błędu oferty online"):
+                st.text(type(_html_error).__name__ + ": " + str(_html_error))
 
 with tab_rejestr:
     st.markdown("""
